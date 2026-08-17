@@ -424,7 +424,7 @@ async function renderStockPage() {
     <div class="page wide">
       ${backLinkHtml()}
       <h1>在庫一覧</h1>
-      <p class="hint">製造・EC出荷・卸出荷の記録から、日ごとの在庫を自動計算して表示します。</p>
+      <p class="hint">製造・EC出荷・卸出荷の記録から、日ごとの在庫を自動計算して表示します。表の数字をクリックすると、その日・その商品の明細(EC出荷のモール別内訳、卸出荷の卸先別内訳)が見られます。</p>
       <div class="card">
         <div class="field-row">
           <div class="field">
@@ -437,6 +437,7 @@ async function renderStockPage() {
           </div>
         </div>
       </div>
+      <div id="stock-detail" class="card" style="display:none"></div>
       <div id="stock-body"><p class="hint">読み込み中...</p></div>
     </div>`;
   const categorySelect = document.getElementById('stock-category');
@@ -524,14 +525,20 @@ async function loadStockBody(category, monthStr) {
     const bodyRows = rows
       .map((r) => {
         const cellsHtml = r.cells
-          .map(
-            (c) =>
-              `<td class="${c.production ? '' : 'cell-empty'}">${c.production || ''}</td>` +
-              `<td class="${c.ec ? '' : 'cell-empty'}">${c.ec || ''}</td>` +
-              c.flaggedValues.map((v) => `<td class="${v ? '' : 'cell-empty'}">${v || ''}</td>`).join('') +
-              `<td class="${c.wholesaleOther ? '' : 'cell-empty'}">${c.wholesaleOther || ''}</td>` +
-              `<td>${c.stock}</td>`
-          )
+          .map((c, pi) => {
+            const pid = products[pi].id;
+            const td = (val) =>
+              `<td class="stock-cell${val ? '' : ' cell-empty'}" data-date="${r.date}" data-product-id="${pid}">${val || ''}</td>`;
+            const tdStock = (val) =>
+              `<td class="stock-cell" data-date="${r.date}" data-product-id="${pid}">${val}</td>`;
+            return (
+              td(c.production) +
+              td(c.ec) +
+              c.flaggedValues.map((v) => td(v)).join('') +
+              td(c.wholesaleOther) +
+              tdStock(c.stock)
+            );
+          })
           .join('');
         const todayCls = r.date === todayStr() ? ' class="cal-list-today"' : '';
         return `<tr${todayCls}><td class="row-label">${formatDateJp(r.date)}</td>${cellsHtml}</tr>`;
@@ -545,9 +552,69 @@ async function loadStockBody(category, monthStr) {
           <tbody>${bodyRows}</tbody>
         </table>
       </div>`;
+
+    const table = body.querySelector('.agg-table');
+    table.addEventListener('click', (e) => {
+      const td = e.target.closest('td.stock-cell');
+      if (!td) return;
+      showStockDetail(td.dataset.date, td.dataset.productId, { products, rows, wholesaleRows, ecRows, allDestinations });
+    });
   } catch (e) {
     body.innerHTML = `<p class="msg-error">読み込みに失敗しました: ${escapeHtml(e.message)}</p>`;
   }
+}
+
+function showStockDetail(date, productId, { products, rows, wholesaleRows, ecRows, allDestinations }) {
+  const detailEl = document.getElementById('stock-detail');
+  const product = products.find((p) => p.id === productId);
+  const productIdx = products.findIndex((p) => p.id === productId);
+  const row = rows.find((r) => r.date === date);
+  if (!detailEl || !product || !row) return;
+  const cell = row.cells[productIdx];
+
+  const ecByMall = {};
+  ecRows.forEach((r) => {
+    if (r.ship_date === date && r.product_id === productId) {
+      ecByMall[r.mall] = (ecByMall[r.mall] || 0) + Number(r.qty);
+    }
+  });
+  const ecRowsHtml = MALLS.map(
+    (m) => `<div class="qty-row"><span class="qty-name">${escapeHtml(m.name)}</span><span>${ecByMall[m.slug] || 0}</span></div>`
+  ).join('');
+
+  const wsByDest = {};
+  wholesaleRows.forEach((r) => {
+    if (r.ship_date === date && r.product_id === productId) {
+      wsByDest[r.destination_id] = (wsByDest[r.destination_id] || 0) + Number(r.qty);
+    }
+  });
+  const wsDestIds = Object.keys(wsByDest).filter((id) => wsByDest[id] > 0);
+  const wsRowsHtml = wsDestIds.length
+    ? wsDestIds
+        .map((id) => {
+          const dest = allDestinations.find((d) => d.id === id);
+          return `<div class="qty-row"><span class="qty-name">${escapeHtml(dest ? dest.name : '(不明な卸出荷先)')}</span><span>${
+            wsByDest[id]
+          }</span></div>`;
+        })
+        .join('')
+    : '<p class="hint">この日の卸出荷記録はありません。</p>';
+
+  detailEl.innerHTML = `
+    <div class="field-row" style="align-items:center; justify-content:space-between; flex-wrap:nowrap;">
+      <h2 style="margin:0">${formatDateJp(date)} ${escapeHtml(product.name)} の明細</h2>
+      <button class="btn-plain" id="stock-detail-close">閉じる</button>
+    </div>
+    <p class="hint">製造: ${cell.production} / 在庫(この日時点): ${cell.stock}</p>
+    <h2 class="section-title">EC出荷内訳</h2>
+    ${ecRowsHtml}
+    <h2 class="section-title">卸出荷内訳</h2>
+    ${wsRowsHtml}`;
+  detailEl.style.display = '';
+  detailEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  document.getElementById('stock-detail-close').addEventListener('click', () => {
+    detailEl.style.display = 'none';
+  });
 }
 
 // ---- 商品マスタ管理 ----
