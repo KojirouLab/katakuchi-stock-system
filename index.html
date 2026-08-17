@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>カタクチ商店 在庫管理システム</title>
+<link rel="icon" href="icons/icon-192.png?v=202608171700" type="image/png">
+<link rel="apple-touch-icon" href="icons/icon-192.png?v=202608171700">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="カタクチ商店 在庫管理">
+<meta name="theme-color" content="#0d6b58">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root {
+    --primary: #0d6b58;
+    --primary-dark: #0a5545;
+    --bg: #f7f7f5;
+    --card-bg: #ffffff;
+    --border: #e2e2de;
+    --text: #2a2a28;
+    --hint: #767671;
+    --danger: #c0392b;
+    --success: #1e7a3d;
+    --warning: #9a6400;
+    --warning-bg: #fbf1dc;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  .page {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 20px 16px 60px;
+  }
+  .page.wide {
+    max-width: 1100px;
+  }
+  h1 {
+    font-size: 22px;
+    margin: 8px 0 4px;
+  }
+  h2 {
+    font-size: 16px;
+    margin: 0 0 12px;
+  }
+  h2.section-title {
+    margin: 24px 4px 8px;
+    padding-top: 12px;
+    border-top: 2px solid var(--primary);
+  }
+  h2.section-title:first-child {
+    margin-top: 4px;
+    border-top: none;
+    padding-top: 0;
+  }
+  .hint {
+    color: var(--hint);
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .admin-back-link {
+    margin: 0 0 8px;
+  }
+  .admin-back-link a {
+    font-size: 13px;
+    color: var(--primary);
+    text-decoration: none;
+    font-weight: 600;
+  }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 16px;
+    margin: 16px 0;
+  }
+  .field {
+    margin-bottom: 14px;
+  }
+  .field-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .field-row .field {
+    flex: 1;
+    min-width: 140px;
+  }
+  label {
+    display: block;
+    font-size: 13px;
+    color: var(--hint);
+    margin-bottom: 6px;
+  }
+  input, textarea, select {
+    width: 100%;
+    font-size: 16px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #fff;
+    color: var(--text);
+    font-family: inherit;
+  }
+  input[type="date"], input[type="month"] {
+    width: 100%;
+    max-width: 100%;
+    padding-left: 8px;
+    padding-right: 8px;
+    box-sizing: border-box;
+  }
+  input:disabled, textarea:disabled, select:disabled {
+    background: #f0f0ec;
+    color: var(--hint);
+  }
+  textarea {
+    resize: vertical;
+  }
+  .checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    color: var(--text);
+    margin-bottom: 14px;
+    cursor: pointer;
+  }
+  .checkbox-label input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    flex: none;
+  }
+  button.primary {
+    width: 100%;
+    padding: 13px;
+    font-size: 16px;
+    font-weight: 600;
+    color: #fff;
+    background: var(--primary);
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    margin-top: 4px;
+  }
+  button.primary:active {
+    background: var(--primary-dark);
+  }
+  button.primary:disabled {
+    opacity: 0.6;
+  }
+  .btn-plain {
+    width: auto;
+    padding: 6px 12px;
+    font-size: 13px;
+    font-weight: 600;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #fff;
+    color: var(--primary);
+    cursor: pointer;
+  }
+  .msg {
+    min-height: 20px;
+    font-size: 13px;
+    margin-top: 10px;
+  }
+  .msg-success, .msg-error {
+    font-size: 14px;
+    font-weight: 700;
+    padding: 10px 12px;
+    border-radius: 8px;
+  }
+  .msg-success { color: var(--success); background: #e6f4ea; }
+  .msg-error { color: var(--danger); background: #fbe9e7; }
+  .home-links {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .home-links li {
+    border-bottom: 1px solid var(--border);
+  }
+  .home-links li:last-child {
+    border-bottom: none;
+  }
+  .home-links a {
+    display: block;
+    padding: 12px 4px;
+    color: var(--primary);
+    text-decoration: none;
+    font-weight: 500;
+  }
+  .qty-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 9px 2px;
+    border-bottom: 1px solid var(--border);
+  }
+  .qty-row:last-child {
+    border-bottom: none;
+  }
+  .qty-name {
+    font-size: 14px;
+    color: var(--text);
+    flex: 1;
+  }
+  .qty-name.inactive {
+    color: var(--hint);
+  }
+  .qty-input {
+    width: 84px;
+    flex: none;
+    text-align: center;
+  }
+  .master-row {
+    padding: 10px 2px;
+  }
+  .master-edit-form .card {
+    margin: 0 0 16px;
+    background: #fafaf8;
+  }
+  .table-scroll {
+    overflow-x: auto;
+    margin: 0 -4px;
+  }
+  .agg-table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 12.5px;
+  }
+  .agg-table th, .agg-table td {
+    border: 1px solid var(--border);
+    padding: 5px 7px;
+    text-align: center;
+    white-space: nowrap;
+  }
+  .agg-table thead th {
+    background: #f0f0ec;
+    font-weight: 700;
+    color: var(--text);
+  }
+  .agg-table .row-label {
+    text-align: left;
+    font-weight: 700;
+    background: #fafaf8;
+    position: sticky;
+    left: 0;
+  }
+  .agg-table tbody tr:nth-child(even) td:not(.row-label) {
+    background: #fafaf8;
+  }
+  .agg-table .cell-empty {
+    color: var(--hint);
+  }
+  .agg-table .cal-list-today td {
+    background: #e3f0ec;
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script src="storage.js?v=202608171700"></script>
+<script src="app.js?v=202608171700"></script>
+</body>
+</html>
