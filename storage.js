@@ -1,8 +1,10 @@
-// ここに Supabase の Project URL と anon key を貼り付けてください。
-// (Supabase ダッシュボード > Project Settings > API で確認できます。anon key は
-// 公開されても問題ない設計です。アクセス制御はURLを知っている人だけに限定する運用で行っています。)
-const SUPABASE_URL = 'https://YOUR-PROJECT-REF.supabase.co';
-const SUPABASE_ANON_KEY = 'YOUR-ANON-KEY';
+// Supabaseの無料プランは1プロジェクトまでのため、受発注システム(order-system)と
+// 同じSupabaseプロジェクト(「カタクチ ジュチュウ sys」)を共用している。テーブル名は
+// 全て異なるため(products/wholesale_destinations/production_records/wholesale_shipments/
+// ec_shipments)、データが混ざる心配はない。anon keyは公開されても問題ない設計で、
+// アクセス制御はURLを知っている人だけに限定する運用で行っている。
+const SUPABASE_URL = 'https://krdwyfemepbbyrteyoeb.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_ouoTLzgoCxmyMf7D_kWdzQ_YTEXc2tk';
 
 let sb = null;
 try {

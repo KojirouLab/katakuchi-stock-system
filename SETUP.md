@@ -4,15 +4,16 @@
 「Supabase(データの保存先)」と「GitHub Pages(アプリの公開場所)」です。
 どちらも無料で作れます。
 
-## 1. Supabaseプロジェクトを作る
+## 1. テーブルを作る(Supabaseは受発注システムと共用)
 
-1. https://supabase.com にアクセスし、GitHubアカウントなどでサインアップ(既にorder-system用のアカウントがあれば、そのまま使ってOK)
-2. 「New project」から新規プロジェクトを作成(名前は任意、リージョンは Tokyo (ap-northeast-1) がおすすめ)。**order-system用のプロジェクトとは別に、新しいプロジェクトとして作成してください**
-3. 作成が終わったら、左メニューの **SQL Editor** を開き、このフォルダの `supabase.sql` の中身を貼り付けて実行(テーブル・アクセス制御・卸出荷先の初期データができます)
-4. 左メニューの **Project Settings > API** を開き、次の2つをメモ
-   - Project URL(例: `https://xxxxx.supabase.co`)
-   - anon public key(長い文字列)
-5. `storage.js` の一番上にある `SUPABASE_URL` と `SUPABASE_ANON_KEY` を、メモした値に書き換える
+Supabase無料プランは1アカウントにつきアクティブなプロジェクトを2つまでしか作れず、
+既に受発注システム用・タスクカレンダー用の2つで埋まっているため、**新規プロジェクトは
+作らず、受発注システムと同じSupabaseプロジェクト(「カタクチ ジュチュウ sys」)を共用**
+することにした。テーブル名は`pizza_orders`等と重複しないため、データが混ざる心配はない。
+
+1. https://supabase.com にログインし、「カタクチ ジュチュウ sys」プロジェクトを開く
+2. 左メニューの **SQL Editor** を開き、このフォルダの `supabase.sql` の中身を貼り付けて実行(テーブル・アクセス制御・卸出荷先の初期データができます)
+3. `storage.js` の `SUPABASE_URL` / `SUPABASE_ANON_KEY` は受発注システムと同じ値を設定済みなので、変更不要
 
 ## 2. GitHubで公開する
 

@@ -1,4 +1,6 @@
--- Supabase の SQL Editor にこの内容を貼り付けて実行してください。
+-- 受発注システム(order-system)と同じSupabaseプロジェクト(「カタクチ ジュチュウ sys」)の
+-- SQL Editor にこの内容を貼り付けて実行してください。テーブル名は既存の
+-- pizza_orders / oyster_orders 等と重複しないため、安全に追加できます。
 
 create table if not exists products (
   id uuid primary key default gen_random_uuid(),
