@@ -57,6 +57,10 @@ function backLinkHtml() {
   return '<p class="admin-back-link"><a href="./">← ホームへ戻る</a></p>';
 }
 
+function categoryOptionsHtml() {
+  return CATEGORIES.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+}
+
 function route() {
   const params = new URLSearchParams(location.search);
   const view = params.get('view');
@@ -102,22 +106,15 @@ function renderError(msg) {
   app.innerHTML = `<div class="page">${backLinkHtml()}<div class="card"><p class="msg-error">${escapeHtml(msg)}</p></div></div>`;
 }
 
-// ---- 数量入力フォーム(商品ごとにqty入力欄。カテゴリ見出しで区切る)共通部品 ----
+// ---- 数量入力フォーム(選択中カテゴリの商品ごとにqty入力欄を並べる)共通部品 ----
 
 function renderQtyForm(products, byProductQty) {
   if (!products.length) {
-    return '<div class="card"><p class="hint">商品が登録されていません。<a href="?view=products">商品マスタ管理</a>から登録してください。</p></div>';
+    return '<div class="card"><p class="hint">このカテゴリには商品が登録されていません。<a href="?view=products">商品マスタ管理</a>から登録してください。</p></div>';
   }
-  const byCategory = {};
-  products.forEach((p) => {
-    (byCategory[p.category] = byCategory[p.category] || []).push(p);
-  });
-  return Object.keys(byCategory)
-    .map(
-      (cat) => `
-    <h2 class="section-title">${escapeHtml(cat)}</h2>
+  return `
     <div class="card">
-      ${byCategory[cat]
+      ${products
         .map(
           (p) => `
         <div class="qty-row">
@@ -128,9 +125,7 @@ function renderQtyForm(products, byProductQty) {
         </div>`
         )
         .join('')}
-    </div>`
-    )
-    .join('');
+    </div>`;
 }
 
 function collectQtyEntries(container, products) {
@@ -151,9 +146,15 @@ async function renderProductionPage() {
       <h1>製造入力</h1>
       <p class="hint">その日に製造した個数を商品ごとに入力してください。0のまま保存すると記録は残りません。</p>
       <div class="card">
-        <div class="field">
-          <label for="prod-date">日付</label>
-          <input type="date" id="prod-date" value="${date}">
+        <div class="field-row">
+          <div class="field">
+            <label for="prod-date">日付</label>
+            <input type="date" id="prod-date" value="${date}">
+          </div>
+          <div class="field">
+            <label for="prod-category">カテゴリ</label>
+            <select id="prod-category">${categoryOptionsHtml()}</select>
+          </div>
         </div>
       </div>
       <div id="prod-body"><p class="hint">読み込み中...</p></div>
@@ -161,11 +162,14 @@ async function renderProductionPage() {
       <div class="msg" id="prod-msg"></div>
     </div>`;
   const dateInput = document.getElementById('prod-date');
-  dateInput.addEventListener('change', () => loadProductionBody(dateInput.value));
-  await loadProductionBody(dateInput.value);
+  const categorySelect = document.getElementById('prod-category');
+  const reload = () => loadProductionBody(dateInput.value, categorySelect.value);
+  dateInput.addEventListener('change', reload);
+  categorySelect.addEventListener('change', reload);
+  await reload();
 }
 
-async function loadProductionBody(date) {
+async function loadProductionBody(date, category) {
   const body = document.getElementById('prod-body');
   const saveBtn = document.getElementById('prod-save');
   const msg = document.getElementById('prod-msg');
@@ -174,7 +178,8 @@ async function loadProductionBody(date) {
   saveBtn.style.display = 'none';
   body.innerHTML = '<p class="hint">読み込み中...</p>';
   try {
-    const [products, records] = await Promise.all([fetchProducts(), fetchProductionForDate(date)]);
+    const [allProducts, records] = await Promise.all([fetchProducts(), fetchProductionForDate(date)]);
+    const products = allProducts.filter((p) => p.category === category);
     const byProductQty = {};
     records.forEach((r) => {
       byProductQty[r.product_id] = r.qty;
@@ -221,6 +226,10 @@ async function renderWholesalePage() {
             <label for="ws-dest">卸出荷先</label>
             <select id="ws-dest"><option value="">読み込み中...</option></select>
           </div>
+          <div class="field">
+            <label for="ws-category">カテゴリ</label>
+            <select id="ws-category">${categoryOptionsHtml()}</select>
+          </div>
         </div>
       </div>
       <div id="ws-body"></div>
@@ -229,6 +238,7 @@ async function renderWholesalePage() {
     </div>`;
   const dateInput = document.getElementById('ws-date');
   const destSelect = document.getElementById('ws-dest');
+  const categorySelect = document.getElementById('ws-category');
   try {
     const destinations = await fetchDestinations();
     destSelect.innerHTML = destinations.map((d) => `<option value="${d.id}">${escapeHtml(d.name)}</option>`).join('');
@@ -239,13 +249,14 @@ async function renderWholesalePage() {
     )}</p>`;
     return;
   }
-  const reload = () => loadWholesaleBody(dateInput.value, destSelect.value);
+  const reload = () => loadWholesaleBody(dateInput.value, destSelect.value, categorySelect.value);
   dateInput.addEventListener('change', reload);
   destSelect.addEventListener('change', reload);
+  categorySelect.addEventListener('change', reload);
   await reload();
 }
 
-async function loadWholesaleBody(date, destinationId) {
+async function loadWholesaleBody(date, destinationId, category) {
   const body = document.getElementById('ws-body');
   const saveBtn = document.getElementById('ws-save');
   const msg = document.getElementById('ws-msg');
@@ -258,7 +269,8 @@ async function loadWholesaleBody(date, destinationId) {
   }
   body.innerHTML = '<p class="hint">読み込み中...</p>';
   try {
-    const [products, records] = await Promise.all([fetchProducts(), fetchWholesaleForDateDestination(date, destinationId)]);
+    const [allProducts, records] = await Promise.all([fetchProducts(), fetchWholesaleForDateDestination(date, destinationId)]);
+    const products = allProducts.filter((p) => p.category === category);
     const byProductQty = {};
     records.forEach((r) => {
       byProductQty[r.product_id] = r.qty;
@@ -306,6 +318,10 @@ async function renderEcPage() {
             <label for="ec-mall">モール</label>
             <select id="ec-mall">${mallOptions}</select>
           </div>
+          <div class="field">
+            <label for="ec-category">カテゴリ</label>
+            <select id="ec-category">${categoryOptionsHtml()}</select>
+          </div>
         </div>
       </div>
       <div id="ec-body"></div>
@@ -314,13 +330,15 @@ async function renderEcPage() {
     </div>`;
   const dateInput = document.getElementById('ec-date');
   const mallSelect = document.getElementById('ec-mall');
-  const reload = () => loadEcBody(dateInput.value, mallSelect.value);
+  const categorySelect = document.getElementById('ec-category');
+  const reload = () => loadEcBody(dateInput.value, mallSelect.value, categorySelect.value);
   dateInput.addEventListener('change', reload);
   mallSelect.addEventListener('change', reload);
+  categorySelect.addEventListener('change', reload);
   await reload();
 }
 
-async function loadEcBody(date, mall) {
+async function loadEcBody(date, mall, category) {
   const body = document.getElementById('ec-body');
   const saveBtn = document.getElementById('ec-save');
   const msg = document.getElementById('ec-msg');
@@ -329,7 +347,8 @@ async function loadEcBody(date, mall) {
   saveBtn.style.display = 'none';
   body.innerHTML = '<p class="hint">読み込み中...</p>';
   try {
-    const [products, records] = await Promise.all([fetchProducts(), fetchEcForDateMall(date, mall)]);
+    const [allProducts, records] = await Promise.all([fetchProducts(), fetchEcForDateMall(date, mall)]);
+    const products = allProducts.filter((p) => p.category === category);
     const byProductQty = {};
     records.forEach((r) => {
       byProductQty[r.product_id] = r.qty;
