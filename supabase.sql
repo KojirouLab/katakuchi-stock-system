@@ -7,7 +7,21 @@ create table if not exists products (
   category text not null,
   name text not null,
   sort_order int not null default 0,
-  active boolean not null default true
+  active boolean not null default true,
+  -- 'split': 在庫一覧でEC出荷と卸出荷を分けて表示(通常)。'combined': 分けずに「出荷」1本にまとめる
+  shipment_mode text not null default 'split' check (shipment_mode in ('split', 'combined')),
+  -- 在庫一覧に製造列を表示するか(通常true。仕入れ品など製造しない商品ではfalseにする)
+  show_production boolean not null default true
+);
+
+-- 商品ごとに「在庫一覧で独立列として表示する卸出荷先」を個別に選べるようにする
+-- (例: 130玉だけFBAを分けたい、8ナポリだけ「爆盛り」「みち」を分けたい、等)
+create table if not exists product_stock_columns (
+  id uuid primary key default gen_random_uuid(),
+  product_id uuid not null references products(id),
+  destination_id uuid not null references wholesale_destinations(id),
+  sort_order int not null default 0,
+  unique (product_id, destination_id)
 );
 
 create table if not exists wholesale_destinations (
@@ -15,8 +29,8 @@ create table if not exists wholesale_destinations (
   name text not null,
   sort_order int not null default 0,
   active boolean not null default true,
-  -- trueの卸出荷先は、在庫一覧の表で「卸出荷」に丸めず、常に独立した列として表示する
-  -- (例: FBA、特定の得意先だけ商品によって個別集計したい場合など)
+  -- trueの卸出荷先は、商品マスタ管理で「この商品の独立列にする」候補として選べるようになる
+  -- (実際にどの商品で独立列にするかはproduct_stock_columnsで商品ごとに決める)
   show_as_stock_column boolean not null default false
 );
 
@@ -50,6 +64,7 @@ create table if not exists ec_shipments (
 );
 
 alter table products enable row level security;
+alter table product_stock_columns enable row level security;
 alter table wholesale_destinations enable row level security;
 alter table production_records enable row level security;
 alter table wholesale_shipments enable row level security;
@@ -63,6 +78,11 @@ create policy "products anon select" on products for select using (true);
 create policy "products anon insert" on products for insert with check (true);
 create policy "products anon update" on products for update using (true);
 create policy "products anon delete" on products for delete using (true);
+
+create policy "product_stock_columns anon select" on product_stock_columns for select using (true);
+create policy "product_stock_columns anon insert" on product_stock_columns for insert with check (true);
+create policy "product_stock_columns anon update" on product_stock_columns for update using (true);
+create policy "product_stock_columns anon delete" on product_stock_columns for delete using (true);
 
 create policy "wholesale_destinations anon select" on wholesale_destinations for select using (true);
 create policy "wholesale_destinations anon insert" on wholesale_destinations for insert with check (true);

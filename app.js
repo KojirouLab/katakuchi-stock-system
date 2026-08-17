@@ -448,21 +448,79 @@ async function renderStockPage() {
   await reload();
 }
 
+// 商品ごとの在庫一覧の列構成を決める。
+// - shipment_mode='combined'なら「出荷」1本、それ以外はEC出荷/卸出荷を分ける
+// - 商品ごとに設定した独立列(destsForP)を間に挟む
+// - 在庫は常に表示、製造はshow_production!==falseの時だけ末尾に表示
+function buildColumnsSpec(product, destsForP) {
+  const cols = [];
+  if (product.shipment_mode === 'combined') {
+    cols.push({ type: 'shipped', label: '出荷' });
+  } else {
+    cols.push({ type: 'ec', label: 'EC出荷' });
+  }
+  destsForP.forEach((d) => cols.push({ type: 'dest', label: d.name, destId: d.id }));
+  if (product.shipment_mode !== 'combined') {
+    cols.push({ type: 'wholesale_other', label: '卸出荷' });
+  }
+  cols.push({ type: 'stock', label: '在庫' });
+  if (product.show_production !== false) {
+    cols.push({ type: 'production', label: '製造' });
+  }
+  return cols;
+}
+
+function cellValueForColumn(col, cell) {
+  switch (col.type) {
+    case 'ec':
+      return cell.ec;
+    case 'shipped':
+      return cell.ec + cell.wholesaleOther;
+    case 'dest':
+      return cell.destValues[col.destId] || 0;
+    case 'wholesale_other':
+      return cell.wholesaleOther;
+    case 'stock':
+      return cell.stock;
+    case 'production':
+      return cell.production;
+    default:
+      return 0;
+  }
+}
+
 async function loadStockBody(category, monthStr) {
   const body = document.getElementById('stock-body');
   body.innerHTML = '<p class="hint">読み込み中...</p>';
   try {
-    const [allProducts, allDestinations] = await Promise.all([fetchProducts(), fetchDestinations({ activeOnly: false })]);
+    const [allProducts, allDestinations, allProductStockColumns] = await Promise.all([
+      fetchProducts(),
+      fetchDestinations({ activeOnly: false }),
+      fetchAllProductStockColumns(),
+    ]);
     const products = allProducts.filter((p) => p.category === category);
     if (!products.length) {
       body.innerHTML = '<div class="card"><p class="hint">このカテゴリには商品が登録されていません。</p></div>';
       return;
     }
-    // 「在庫一覧で独立列として表示する」がオンの卸出荷先は、卸出荷の合計とは別に列を分ける
-    // (例: FBA、特定の得意先だけ商品によって個別に見たい場合など)。
-    const flaggedDests = allDestinations
-      .filter((d) => d.show_as_stock_column)
-      .sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name));
+    const destById = {};
+    allDestinations.forEach((d) => {
+      destById[d.id] = d;
+    });
+    // 商品ごとに「独立列にする卸出荷先」のリストを作る(product_stock_columnsのsort_order順)
+    const destsByProduct = {};
+    allProductStockColumns
+      .slice()
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .forEach((row) => {
+        const dest = destById[row.destination_id];
+        if (!dest) return;
+        (destsByProduct[row.product_id] = destsByProduct[row.product_id] || []).push(dest);
+      });
+    const columnsSpecByProduct = {};
+    products.forEach((p) => {
+      columnsSpecByProduct[p.id] = buildColumnsSpec(p, destsByProduct[p.id] || []);
+    });
 
     const monthStart = `${monthStr}-01`;
     const monthEnd = `${monthStr}-${String(daysInMonth(monthStr)).padStart(2, '0')}`;
@@ -487,7 +545,7 @@ async function loadStockBody(category, monthStr) {
     const dailyProd = sumByDateProduct(productionRows, 'record_date');
     const dailyWs = sumByDateProduct(wholesaleRows, 'ship_date'); // 卸出荷の合計(全卸出荷先)
     const dailyEc = sumByDateProduct(ecRows, 'ship_date');
-    // 独立列にした卸出荷先ごとの日別内訳(destination_idもキーに含める)
+    // 卸出荷先ごとの日別内訳(destination_idもキーに含める)
     const dailyWsByDest = {};
     wholesaleRows.forEach((r) => {
       const k = `${r.ship_date}|${r.product_id}|${r.destination_id}`;
@@ -502,42 +560,44 @@ async function loadStockBody(category, monthStr) {
         const dp = dailyProd[key] || 0;
         const dwTotal = dailyWs[key] || 0;
         const de = dailyEc[key] || 0;
-        const flaggedValues = flaggedDests.map((fd) => dailyWsByDest[`${d}|${p.id}|${fd.id}`] || 0);
-        const flaggedSum = flaggedValues.reduce((a, b) => a + b, 0);
+        const destsForP = destsByProduct[p.id] || [];
+        const destValues = {};
+        let flaggedSum = 0;
+        destsForP.forEach((dest) => {
+          const v = dailyWsByDest[`${d}|${p.id}|${dest.id}`] || 0;
+          destValues[dest.id] = v;
+          flaggedSum += v;
+        });
         const wholesaleOther = dwTotal - flaggedSum;
         balance[p.id] = (balance[p.id] || 0) + dp - dwTotal - de;
-        return { production: dp, ec: de, flaggedValues, wholesaleOther, stock: balance[p.id] };
+        return { production: dp, ec: de, destValues, wholesaleOther, stock: balance[p.id] };
       });
       rows.push({ date: d, cells });
       d = nextDateStr(d);
     }
 
-    const colsPerProduct = 4 + flaggedDests.length;
     const headerRow1 =
       '<tr><th rowspan="2">日付</th>' +
-      products.map((p) => `<th colspan="${colsPerProduct}">${escapeHtml(p.name)}</th>`).join('') +
+      products.map((p) => `<th colspan="${columnsSpecByProduct[p.id].length}">${escapeHtml(p.name)}</th>`).join('') +
       '</tr>';
-    const subHeaderHtml =
-      '<th>製造</th><th>EC出荷</th>' +
-      flaggedDests.map((fd) => `<th>${escapeHtml(fd.name)}</th>`).join('') +
-      '<th>卸出荷</th><th>在庫</th>';
-    const headerRow2 = '<tr>' + products.map(() => subHeaderHtml).join('') + '</tr>';
+    const headerRow2 =
+      '<tr>' +
+      products.map((p) => columnsSpecByProduct[p.id].map((col) => `<th>${escapeHtml(col.label)}</th>`).join('')).join('') +
+      '</tr>';
     const bodyRows = rows
       .map((r) => {
         const cellsHtml = r.cells
           .map((c, pi) => {
-            const pid = products[pi].id;
-            const td = (val) =>
-              `<td class="stock-cell${val ? '' : ' cell-empty'}" data-date="${r.date}" data-product-id="${pid}">${val || ''}</td>`;
-            const tdStock = (val) =>
-              `<td class="stock-cell" data-date="${r.date}" data-product-id="${pid}">${val}</td>`;
-            return (
-              td(c.production) +
-              td(c.ec) +
-              c.flaggedValues.map((v) => td(v)).join('') +
-              td(c.wholesaleOther) +
-              tdStock(c.stock)
-            );
+            const p = products[pi];
+            const cols = columnsSpecByProduct[p.id];
+            return cols
+              .map((col) => {
+                const val = cellValueForColumn(col, c);
+                const displayVal = col.type === 'stock' ? val : val || '';
+                const emptyCls = col.type !== 'stock' && !val ? ' cell-empty' : '';
+                return `<td class="stock-cell${emptyCls}" data-date="${r.date}" data-product-id="${p.id}">${displayVal}</td>`;
+              })
+              .join('');
           })
           .join('');
         const todayCls = r.date === todayStr() ? ' class="cal-list-today"' : '';
@@ -678,7 +738,11 @@ async function loadProductsList() {
   const listEl = document.getElementById('products-list');
   listEl.innerHTML = '<p class="hint">読み込み中...</p>';
   try {
-    const products = await fetchProducts({ activeOnly: false });
+    const [products, allDestinations] = await Promise.all([
+      fetchProducts({ activeOnly: false }),
+      fetchDestinations({ activeOnly: false }),
+    ]);
+    const candidateDests = allDestinations.filter((d) => d.show_as_stock_column);
     const byCategory = {};
     products.forEach((p) => {
       (byCategory[p.category] = byCategory[p.category] || []).push(p);
@@ -702,14 +766,14 @@ async function loadProductsList() {
       )
       .join('');
     listEl.querySelectorAll('.master-edit-btn').forEach((btn) => {
-      btn.addEventListener('click', () => toggleProductEditForm(btn.dataset.id, products));
+      btn.addEventListener('click', () => toggleProductEditForm(btn.dataset.id, products, candidateDests));
     });
   } catch (e) {
     listEl.innerHTML = `<p class="msg-error">読み込みに失敗しました: ${escapeHtml(e.message)}</p>`;
   }
 }
 
-function toggleProductEditForm(id, products) {
+async function toggleProductEditForm(id, products, candidateDests) {
   const el = document.getElementById(`edit-product-${id}`);
   if (el.style.display !== 'none') {
     el.style.display = 'none';
@@ -718,6 +782,20 @@ function toggleProductEditForm(id, products) {
   }
   const p = products.find((x) => x.id === id);
   el.style.display = '';
+  el.innerHTML = '<div class="card"><p class="hint">読み込み中...</p></div>';
+  const currentCols = await fetchProductStockColumns(id);
+  const currentDestIds = new Set(currentCols.map((c) => c.destination_id));
+  const destCheckboxesHtml = candidateDests.length
+    ? candidateDests
+        .map(
+          (d) => `
+        <label class="checkbox-label">
+          <input type="checkbox" class="edit-stockcol-${id}" value="${d.id}" ${currentDestIds.has(d.id) ? 'checked' : ''}>
+          ${escapeHtml(d.name)}
+        </label>`
+        )
+        .join('')
+    : '<p class="hint">独立列にできる卸出荷先がありません。卸出荷先マスタ管理で「在庫一覧で独立列として表示する」をオンにした卸出荷先が、ここに候補として出ます。</p>';
   el.innerHTML = `
     <div class="card">
       <div class="field">
@@ -738,18 +816,37 @@ function toggleProductEditForm(id, products) {
         <input type="checkbox" id="edit-active-${id}" ${p.active ? 'checked' : ''}>
         表示する(オフにすると入力画面・在庫一覧から隠れます)
       </label>
+      <label class="checkbox-label">
+        <input type="checkbox" id="edit-showprod-${id}" ${p.show_production !== false ? 'checked' : ''}>
+        在庫一覧に製造列を表示する(仕入れ品など製造しない商品はオフ)
+      </label>
+      <div class="field">
+        <label>在庫一覧での出荷の表示</label>
+        <select id="edit-shipmode-${id}">
+          <option value="split" ${p.shipment_mode !== 'combined' ? 'selected' : ''}>EC出荷と卸出荷を分けて表示(通常)</option>
+          <option value="combined" ${p.shipment_mode === 'combined' ? 'selected' : ''}>分けずに「出荷」1本にまとめる</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>在庫一覧でこの商品だけ独立列にする卸出荷先</label>
+        ${destCheckboxesHtml}
+      </div>
       <button class="primary" id="edit-save-${id}">保存する</button>
       <div class="msg" id="edit-msg-${id}"></div>
     </div>`;
   document.getElementById(`edit-save-${id}`).addEventListener('click', async () => {
     const msg = document.getElementById(`edit-msg-${id}`);
     try {
+      const selectedDestIds = [...el.querySelectorAll(`.edit-stockcol-${id}:checked`)].map((cb) => cb.value);
       await updateProduct(id, {
         name: document.getElementById(`edit-name-${id}`).value.trim(),
         category: document.getElementById(`edit-category-${id}`).value,
         sortOrder: Number(document.getElementById(`edit-sort-${id}`).value) || 0,
         active: document.getElementById(`edit-active-${id}`).checked,
+        showProduction: document.getElementById(`edit-showprod-${id}`).checked,
+        shipmentMode: document.getElementById(`edit-shipmode-${id}`).value,
       });
+      await setProductStockColumns(id, selectedDestIds);
       msg.textContent = '保存しました';
       msg.className = 'msg msg-success';
       await loadProductsList();

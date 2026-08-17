@@ -64,6 +64,28 @@ insert into wholesale_destinations (name, sort_order, show_as_stock_column) valu
   ('細谷さん', 18, true);
 ```
 
+**2026-08-17: 商品ごとに「出荷のまとめ方」「独立列にする卸出荷先」「製造列の有無」を設定できるように**
+
+```sql
+alter table products
+  add column if not exists shipment_mode text not null default 'split' check (shipment_mode in ('split', 'combined'));
+alter table products
+  add column if not exists show_production boolean not null default true;
+
+create table if not exists product_stock_columns (
+  id uuid primary key default gen_random_uuid(),
+  product_id uuid not null references products(id),
+  destination_id uuid not null references wholesale_destinations(id),
+  sort_order int not null default 0,
+  unique (product_id, destination_id)
+);
+alter table product_stock_columns enable row level security;
+create policy "product_stock_columns anon select" on product_stock_columns for select using (true);
+create policy "product_stock_columns anon insert" on product_stock_columns for insert with check (true);
+create policy "product_stock_columns anon update" on product_stock_columns for update using (true);
+create policy "product_stock_columns anon delete" on product_stock_columns for delete using (true);
+```
+
 ## 困ったときは
 
 - 保存や読み込みに失敗する: 画面のエラーメッセージを確認し、通信状況を確認して再度お試しください。

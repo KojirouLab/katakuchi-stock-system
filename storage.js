@@ -45,15 +45,58 @@ async function createProductsBulk(rows) {
   if (error) throw error;
 }
 
-async function updateProduct(id, { category, name, sortOrder, active }) {
+async function updateProduct(id, { category, name, sortOrder, active, shipmentMode, showProduction }) {
   assertClient();
   const { data, error } = await sb
     .from('products')
-    .update({ category, name, sort_order: sortOrder, active })
+    .update({
+      category,
+      name,
+      sort_order: sortOrder,
+      active,
+      shipment_mode: shipmentMode,
+      show_production: showProduction,
+    })
     .eq('id', id)
     .select();
   if (error) throw error;
   if (!data || data.length === 0) throw new Error('更新できませんでした(権限設定が反映されていない可能性があります)');
+}
+
+// ---- 商品ごとの在庫一覧・独立列設定 ----
+
+async function fetchProductStockColumns(productId) {
+  assertClient();
+  const { data, error } = await sb
+    .from('product_stock_columns')
+    .select('*')
+    .eq('product_id', productId)
+    .order('sort_order');
+  if (error) throw error;
+  return data || [];
+}
+
+async function fetchAllProductStockColumns() {
+  assertClient();
+  const { data, error } = await sb.from('product_stock_columns').select('*');
+  if (error) throw error;
+  return data || [];
+}
+
+// destinationIds全体で置き換える(全削除→再挿入)。
+async function setProductStockColumns(productId, destinationIds) {
+  assertClient();
+  const { error: delError } = await sb.from('product_stock_columns').delete().eq('product_id', productId);
+  if (delError) throw delError;
+  if (destinationIds.length) {
+    const rows = destinationIds.map((destinationId, i) => ({
+      product_id: productId,
+      destination_id: destinationId,
+      sort_order: i,
+    }));
+    const { error: insError } = await sb.from('product_stock_columns').insert(rows);
+    if (insError) throw insError;
+  }
 }
 
 // ---- 卸出荷先マスタ ----
