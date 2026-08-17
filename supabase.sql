@@ -14,7 +14,10 @@ create table if not exists wholesale_destinations (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   sort_order int not null default 0,
-  active boolean not null default true
+  active boolean not null default true,
+  -- trueの卸出荷先は、在庫一覧の表で「卸出荷」に丸めず、常に独立した列として表示する
+  -- (例: FBA、特定の得意先だけ商品によって個別集計したい場合など)
+  show_as_stock_column boolean not null default false
 );
 
 create table if not exists production_records (
@@ -83,17 +86,22 @@ create policy "ec_shipments anon delete" on ec_shipments for delete using (true)
 
 -- 卸出荷先の初期データ(名称が不確かなものもあるため、間違っていたら卸先マスタ管理画面で修正してください)
 -- 一度だけ実行する想定です(name列にunique制約がないため、再実行すると重複登録されます)。
-insert into wholesale_destinations (name, sort_order) values
-  ('ashimoka(Five country wine)', 1),
-  ('韓国', 2),
-  ('松永さん(asteria32)', 3),
-  ('日本酒とワインの倉庫', 4),
-  ('遠藤(ドラゴ)', 5),
-  ('SDMA', 6),
-  ('Acecafe', 7),
-  ('東海', 8),
-  ('In the soup', 9),
-  ('愛と美レジャー(3クリスピー)', 10),
-  ('伊豆諸島', 11),
-  ('FBA', 12),
-  ('その他', 13);
+insert into wholesale_destinations (name, sort_order, show_as_stock_column) values
+  ('ashimoka(Five country wine)', 1, false),
+  ('韓国', 2, false),
+  ('松永さん(asteria32)', 3, false),
+  ('日本酒とワインの倉庫', 4, false),
+  ('遠藤(ドラゴ)', 5, false),
+  ('SDMA', 6, false),
+  ('Acecafe', 7, false),
+  ('東海', 8, false),
+  ('In the soup', 9, false),
+  ('愛と美レジャー(3クリスピー)', 10, false),
+  ('伊豆諸島', 11, false),
+  ('FBA', 12, true),
+  ('その他', 13, false),
+  ('爆盛り', 14, true),
+  ('みち', 15, true),
+  ('ワンピース', 16, true),
+  ('盛り付け', 17, true),
+  ('細谷さん', 18, true);

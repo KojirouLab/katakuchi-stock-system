@@ -76,11 +76,11 @@ async function createDestination({ name, sortOrder }) {
   if (error) throw error;
 }
 
-async function updateDestination(id, { name, sortOrder, active }) {
+async function updateDestination(id, { name, sortOrder, active, showAsStockColumn }) {
   assertClient();
   const { data, error } = await sb
     .from('wholesale_destinations')
-    .update({ name, sort_order: sortOrder, active })
+    .update({ name, sort_order: sortOrder, active, show_as_stock_column: showAsStockColumn })
     .eq('id', id)
     .select();
   if (error) throw error;

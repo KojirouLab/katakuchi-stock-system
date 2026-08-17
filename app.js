@@ -451,12 +451,18 @@ async function loadStockBody(category, monthStr) {
   const body = document.getElementById('stock-body');
   body.innerHTML = '<p class="hint">読み込み中...</p>';
   try {
-    const allProducts = await fetchProducts();
+    const [allProducts, allDestinations] = await Promise.all([fetchProducts(), fetchDestinations({ activeOnly: false })]);
     const products = allProducts.filter((p) => p.category === category);
     if (!products.length) {
       body.innerHTML = '<div class="card"><p class="hint">このカテゴリには商品が登録されていません。</p></div>';
       return;
     }
+    // 「在庫一覧で独立列として表示する」がオンの卸出荷先は、卸出荷の合計とは別に列を分ける
+    // (例: FBA、特定の得意先だけ商品によって個別に見たい場合など)。
+    const flaggedDests = allDestinations
+      .filter((d) => d.show_as_stock_column)
+      .sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name));
+
     const monthStart = `${monthStr}-01`;
     const monthEnd = `${monthStr}-${String(daysInMonth(monthStr)).padStart(2, '0')}`;
     const productIds = new Set(products.map((p) => p.id));
@@ -478,8 +484,14 @@ async function loadStockBody(category, monthStr) {
     });
 
     const dailyProd = sumByDateProduct(productionRows, 'record_date');
-    const dailyWs = sumByDateProduct(wholesaleRows, 'ship_date');
+    const dailyWs = sumByDateProduct(wholesaleRows, 'ship_date'); // 卸出荷の合計(全卸出荷先)
     const dailyEc = sumByDateProduct(ecRows, 'ship_date');
+    // 独立列にした卸出荷先ごとの日別内訳(destination_idもキーに含める)
+    const dailyWsByDest = {};
+    wholesaleRows.forEach((r) => {
+      const k = `${r.ship_date}|${r.product_id}|${r.destination_id}`;
+      dailyWsByDest[k] = (dailyWsByDest[k] || 0) + Number(r.qty);
+    });
 
     const rows = [];
     let d = monthStart;
@@ -487,21 +499,28 @@ async function loadStockBody(category, monthStr) {
       const cells = products.map((p) => {
         const key = `${d}|${p.id}`;
         const dp = dailyProd[key] || 0;
-        const dw = dailyWs[key] || 0;
+        const dwTotal = dailyWs[key] || 0;
         const de = dailyEc[key] || 0;
-        balance[p.id] = (balance[p.id] || 0) + dp - dw - de;
-        return { production: dp, ec: de, wholesale: dw, stock: balance[p.id] };
+        const flaggedValues = flaggedDests.map((fd) => dailyWsByDest[`${d}|${p.id}|${fd.id}`] || 0);
+        const flaggedSum = flaggedValues.reduce((a, b) => a + b, 0);
+        const wholesaleOther = dwTotal - flaggedSum;
+        balance[p.id] = (balance[p.id] || 0) + dp - dwTotal - de;
+        return { production: dp, ec: de, flaggedValues, wholesaleOther, stock: balance[p.id] };
       });
       rows.push({ date: d, cells });
       d = nextDateStr(d);
     }
 
+    const colsPerProduct = 4 + flaggedDests.length;
     const headerRow1 =
       '<tr><th rowspan="2">日付</th>' +
-      products.map((p) => `<th colspan="4">${escapeHtml(p.name)}</th>`).join('') +
+      products.map((p) => `<th colspan="${colsPerProduct}">${escapeHtml(p.name)}</th>`).join('') +
       '</tr>';
-    const headerRow2 =
-      '<tr>' + products.map(() => '<th>製造</th><th>EC出荷</th><th>卸出荷</th><th>在庫</th>').join('') + '</tr>';
+    const subHeaderHtml =
+      '<th>製造</th><th>EC出荷</th>' +
+      flaggedDests.map((fd) => `<th>${escapeHtml(fd.name)}</th>`).join('') +
+      '<th>卸出荷</th><th>在庫</th>';
+    const headerRow2 = '<tr>' + products.map(() => subHeaderHtml).join('') + '</tr>';
     const bodyRows = rows
       .map((r) => {
         const cellsHtml = r.cells
@@ -509,7 +528,8 @@ async function loadStockBody(category, monthStr) {
             (c) =>
               `<td class="${c.production ? '' : 'cell-empty'}">${c.production || ''}</td>` +
               `<td class="${c.ec ? '' : 'cell-empty'}">${c.ec || ''}</td>` +
-              `<td class="${c.wholesale ? '' : 'cell-empty'}">${c.wholesale || ''}</td>` +
+              c.flaggedValues.map((v) => `<td class="${v ? '' : 'cell-empty'}">${v || ''}</td>`).join('') +
+              `<td class="${c.wholesaleOther ? '' : 'cell-empty'}">${c.wholesaleOther || ''}</td>` +
               `<td>${c.stock}</td>`
           )
           .join('');
@@ -728,7 +748,9 @@ async function loadDestinationsList() {
           .map(
             (d) => `
           <div class="qty-row master-row">
-            <span class="qty-name${d.active ? '' : ' inactive'}">${escapeHtml(d.name)}${d.active ? '' : '(非表示)'}</span>
+            <span class="qty-name${d.active ? '' : ' inactive'}">${escapeHtml(d.name)}${d.active ? '' : '(非表示)'}${
+              d.show_as_stock_column ? '(在庫一覧に列表示)' : ''
+            }</span>
             <button class="btn-plain master-edit-btn" data-id="${d.id}">編集</button>
           </div>
           <div class="master-edit-form" id="edit-dest-${d.id}" style="display:none"></div>`
@@ -766,6 +788,10 @@ function toggleDestinationEditForm(id, destinations) {
         <input type="checkbox" id="edit-dest-active-${id}" ${d.active ? 'checked' : ''}>
         表示する(オフにすると卸出荷入力画面から隠れます)
       </label>
+      <label class="checkbox-label">
+        <input type="checkbox" id="edit-dest-stockcol-${id}" ${d.show_as_stock_column ? 'checked' : ''}>
+        在庫一覧の表で、この卸出荷先だけ独立した列として表示する(オフの卸出荷先は「卸出荷」欄にまとめて合計されます)
+      </label>
       <button class="primary" id="edit-dest-save-${id}">保存する</button>
       <div class="msg" id="edit-dest-msg-${id}"></div>
     </div>`;
@@ -776,6 +802,7 @@ function toggleDestinationEditForm(id, destinations) {
         name: document.getElementById(`edit-dest-name-${id}`).value.trim(),
         sortOrder: Number(document.getElementById(`edit-dest-sort-${id}`).value) || 0,
         active: document.getElementById(`edit-dest-active-${id}`).checked,
+        showAsStockColumn: document.getElementById(`edit-dest-stockcol-${id}`).checked,
       });
       msg.textContent = '保存しました';
       msg.className = 'msg msg-success';

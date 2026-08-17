@@ -42,6 +42,28 @@ Supabase無料プランは1アカウントにつきアクティブなプロジ�
 - カテゴリを増やしたい場合は、`app.js` 先頭の `CATEGORIES` 配列を編集してください。
 - ECモールを増やしたい場合は、`app.js` 先頭の `MALLS` 配列と、`supabase.sql` の `ec_shipments` テーブルの `check (mall in (...))` 制約の両方を編集してください。
 
+## 6. 既存のSupabaseにテーブル更新を反映する場合
+
+機能追加のたびに、Supabase側で追加のSQL実行が必要になることがあります。
+既にテーブルを作成済みの場合は、**SQL Editor** で以下を追加実行してください
+(初めて作る場合は `supabase.sql` に全部含まれているので不要です)。
+
+**2026-08-17: 卸出荷先に「在庫一覧で独立列として表示する」設定を追加**
+
+```sql
+alter table wholesale_destinations
+  add column if not exists show_as_stock_column boolean not null default false;
+
+update wholesale_destinations set show_as_stock_column = true where name = 'FBA';
+
+insert into wholesale_destinations (name, sort_order, show_as_stock_column) values
+  ('爆盛り', 14, true),
+  ('みち', 15, true),
+  ('ワンピース', 16, true),
+  ('盛り付け', 17, true),
+  ('細谷さん', 18, true);
+```
+
 ## 困ったときは
 
 - 保存や読み込みに失敗する: 画面のエラーメッセージを確認し、通信状況を確認して再度お試しください。
