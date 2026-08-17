@@ -121,7 +121,7 @@ function renderQtyForm(products, byProductQty) {
           <span class="qty-name">${escapeHtml(p.name)}</span>
           <input type="number" inputmode="numeric" min="0" step="1" class="qty-input" data-product-id="${p.id}" value="${
             byProductQty[p.id] || 0
-          }">
+          }" onfocus="this.select()">
         </div>`
         )
         .join('')}
@@ -133,6 +133,24 @@ function collectQtyEntries(container, products) {
     const el = container.querySelector(`.qty-input[data-product-id="${p.id}"]`);
     const qty = el ? Number(el.value) || 0 : 0;
     return { productId: p.id, qty };
+  });
+}
+
+// 数量入力欄でEnterを押すと次の商品の入力欄に移動する(最後の欄では保存ボタンにフォーカス)。
+function enableQtyEnterNav(container, saveBtn) {
+  const inputs = Array.from(container.querySelectorAll('.qty-input'));
+  inputs.forEach((el, i) => {
+    el.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      const next = inputs[i + 1];
+      if (next) {
+        next.focus();
+        next.select();
+      } else if (saveBtn) {
+        saveBtn.focus();
+      }
+    });
   });
 }
 
@@ -186,6 +204,7 @@ async function loadProductionBody(date, category) {
     });
     body.innerHTML = renderQtyForm(products, byProductQty);
     if (products.length) {
+      enableQtyEnterNav(body, saveBtn);
       saveBtn.style.display = '';
       saveBtn.onclick = async () => {
         saveBtn.disabled = true;
@@ -277,6 +296,7 @@ async function loadWholesaleBody(date, destinationId, category) {
     });
     body.innerHTML = renderQtyForm(products, byProductQty);
     if (products.length) {
+      enableQtyEnterNav(body, saveBtn);
       saveBtn.style.display = '';
       saveBtn.onclick = async () => {
         saveBtn.disabled = true;
@@ -355,6 +375,7 @@ async function loadEcBody(date, mall, category) {
     });
     body.innerHTML = renderQtyForm(products, byProductQty);
     if (products.length) {
+      enableQtyEnterNav(body, saveBtn);
       saveBtn.style.display = '';
       saveBtn.onclick = async () => {
         saveBtn.disabled = true;
