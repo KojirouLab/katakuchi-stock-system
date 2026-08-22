@@ -119,7 +119,7 @@ function renderQtyForm(products, byProductQty) {
           (p) => `
         <div class="qty-row">
           <span class="qty-name">${escapeHtml(p.name)}</span>
-          <input type="text" inputmode="numeric" pattern="[0-9]*" class="qty-input" data-product-id="${p.id}" value="${
+          <input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" class="qty-input" data-product-id="${p.id}" value="${
             byProductQty[p.id] || 0
           }" onfocus="this.select()">
         </div>`
@@ -154,8 +154,12 @@ function enableQtyEnterNav(container, saveBtn) {
       if (next) {
         // 次の欄に既存の数字が入っていても、Enterで移動したら必ず0にリセットしてから
         // フォーカスする(既存値の選択に頼らず、常にまっさらな状態で次を打てるようにする)。
-        next.value = '0';
-        next.focus();
+        // フォーカス移動を1ティック遅らせ、直前のキー入力(スマホの予測変換確定など)が
+        // 完全に片付いてから0にリセットする。
+        setTimeout(() => {
+          next.value = '0';
+          next.focus();
+        }, 0);
       } else if (saveBtn) {
         saveBtn.focus();
       }
