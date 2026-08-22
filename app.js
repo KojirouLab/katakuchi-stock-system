@@ -1,5 +1,5 @@
 // 商品カテゴリ(固定リスト)。カテゴリを増やしたい場合はここに追記する。
-const CATEGORIES = ['ピザ', 'チーズ', '新みちのくクリスピー', '新みちのくナポリ', '爆盛チーズピザ'];
+const CATEGORIES = ['ピザ生地', 'チーズ', '新みちのくクリスピー', '新みちのくナポリ', '爆盛チーズピザ'];
 
 // ECモール(固定リスト)。現状は全モール手入力。将来Shopify等をAPI連携する場合は
 // このmallスラッグ(ec_shipments.mall)をそのまま使えるようにしてある。
@@ -136,6 +136,13 @@ function collectQtyEntries(container, products) {
   });
 }
 
+// 保存が終わった入力欄を0に戻す(次の日の入力にそのまま使えるように)。
+function clearQtyInputs(container) {
+  container.querySelectorAll('.qty-input').forEach((el) => {
+    el.value = 0;
+  });
+}
+
 // 数量入力欄でEnterを押すと次の商品の入力欄に移動する(最後の欄では保存ボタンにフォーカス)。
 function enableQtyEnterNav(container, saveBtn) {
   const inputs = Array.from(container.querySelectorAll('.qty-input'));
@@ -211,6 +218,7 @@ async function loadProductionBody(date, category) {
         try {
           const entries = collectQtyEntries(body, products);
           await saveProductionBatch(date, entries);
+          clearQtyInputs(body);
           msg.textContent = '保存しました';
           msg.className = 'msg msg-success';
         } catch (e) {
@@ -303,6 +311,7 @@ async function loadWholesaleBody(date, destinationId, category) {
         try {
           const entries = collectQtyEntries(body, products);
           await saveWholesaleBatch(date, destinationId, entries);
+          clearQtyInputs(body);
           msg.textContent = '保存しました';
           msg.className = 'msg msg-success';
         } catch (e) {
@@ -382,6 +391,7 @@ async function loadEcBody(date, mall, category) {
         try {
           const entries = collectQtyEntries(body, products);
           await saveEcBatch(date, mall, entries);
+          clearQtyInputs(body);
           msg.textContent = '保存しました';
           msg.className = 'msg msg-success';
         } catch (e) {

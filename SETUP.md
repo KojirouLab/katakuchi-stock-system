@@ -86,6 +86,14 @@ create policy "product_stock_columns anon update" on product_stock_columns for u
 create policy "product_stock_columns anon delete" on product_stock_columns for delete using (true);
 ```
 
+**2026-08-22: カテゴリ名「ピザ」→「ピザ生地」に変更**
+
+既存の商品データのカテゴリ名も更新しないと、カテゴリ選択で見えなくなってしまいます。
+
+```sql
+update products set category = 'ピザ生地' where category = 'ピザ';
+```
+
 ## 困ったときは
 
 - 保存や読み込みに失敗する: 画面のエラーメッセージを確認し、通信状況を確認して再度お試しください。
