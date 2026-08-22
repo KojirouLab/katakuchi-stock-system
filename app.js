@@ -152,8 +152,10 @@ function enableQtyEnterNav(container, saveBtn) {
       e.preventDefault();
       const next = inputs[i + 1];
       if (next) {
+        // 次の欄に既存の数字が入っていても、Enterで移動したら必ず0にリセットしてから
+        // フォーカスする(既存値の選択に頼らず、常にまっさらな状態で次を打てるようにする)。
+        next.value = '0';
         next.focus();
-        next.select();
       } else if (saveBtn) {
         saveBtn.focus();
       }
