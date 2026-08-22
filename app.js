@@ -119,7 +119,7 @@ function renderQtyForm(products, byProductQty) {
           (p) => `
         <div class="qty-row">
           <span class="qty-name">${escapeHtml(p.name)}</span>
-          <input type="number" inputmode="numeric" min="0" step="1" class="qty-input" data-product-id="${p.id}" value="${
+          <input type="text" inputmode="numeric" pattern="[0-9]*" class="qty-input" data-product-id="${p.id}" value="${
             byProductQty[p.id] || 0
           }" onfocus="this.select()">
         </div>`
