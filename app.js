@@ -1034,7 +1034,7 @@ function csvRowsToObjects(rows) {
     .slice(1)
     .filter((r) => r.some((v) => v !== ''))
     .map((r) => ({
-      name: idx.name >= 0 ? r[idx.name] || '' : '',
+      name: idx.name >= 0 ? normalizeForMatch(r[idx.name] || '') : '',
       qty: idx.qty >= 0 ? Number(r[idx.qty]) || 0 : 0,
       date: idx.date >= 0 ? (r[idx.date] || '').trim().replace(/\//g, '-') : '',
       orderNo: idx.orderNo >= 0 ? r[idx.orderNo] || '' : '',
@@ -1098,12 +1098,19 @@ function detectSimpleProductName(rawText) {
   return null;
 }
 
+// 商品名の中には「ピ」が合成済み文字と「ヒ」+濁点の分解形式で混在して登録されていることが
+// あり、見た目が同じでも===比較では一致しない。NFC正規化してから比較することで防ぐ。
+function normalizeForMatch(str) {
+  return String(str ?? '').normalize('NFC');
+}
+
 function resolveProductByPrefix(products, category, prefix) {
-  return products.find((p) => p.category === category && p.name.startsWith(String(prefix)));
+  return products.find((p) => p.category === category && normalizeForMatch(p.name).startsWith(String(prefix)));
 }
 
 function resolveProductByCategoryName(products, category, name) {
-  return products.find((p) => p.category === category && p.name === name);
+  const target = normalizeForMatch(name);
+  return products.find((p) => p.category === category && normalizeForMatch(p.name) === target);
 }
 
 // CSVの行オブジェクト配列から、取込候補のエントリ配列を作る。
