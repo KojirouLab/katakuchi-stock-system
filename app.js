@@ -1,14 +1,9 @@
 // 商品カテゴリ(固定リスト)。カテゴリを増やしたい場合はここに追記する。
 const CATEGORIES = ['ピザ生地', 'チーズ', '新みちのくクリスピー', '新みちのくナポリ', '爆盛チーズピザ'];
 
-// ECモール(固定リスト)。現状は全モール手入力。将来Shopify等をAPI連携する場合は
-// このmallスラッグ(ec_shipments.mall)をそのまま使えるようにしてある。
-const MALLS = [
-  { slug: 'yahoo', name: 'Yahoo!ショッピング' },
-  { slug: 'amazon', name: 'Amazon' },
-  { slug: 'rakuten', name: '楽天市場' },
-  { slug: 'shopify', name: 'Shopify(自社EC)' },
-];
+// EC出荷はYahoo!/Amazon/楽天/Shopifyなどモールを問わず合計数量だけを管理する
+// (ec_shipments.mallは常にこの値を使う。将来モール別に分けたくなった場合のために列だけ残してある)。
+const EC_MALL_ALL = 'all';
 
 // 在庫の累計計算をこの日以降のデータで行う(それより前のデータは無い前提の安全な下限)。
 const FAR_PAST_DATE = '2020-01-01';
@@ -67,6 +62,7 @@ function route() {
   if (view === 'production') return renderProductionPage();
   if (view === 'wholesale') return renderWholesalePage();
   if (view === 'ec') return renderEcPage();
+  if (view === 'ec-import') return renderEcImportPage();
   if (view === 'stock') return renderStockPage();
   if (view === 'products') return renderProductsAdminPage();
   if (view === 'destinations') return renderDestinationsAdminPage();
@@ -84,6 +80,7 @@ function renderHome() {
           <li><a href="?view=production">製造入力</a></li>
           <li><a href="?view=wholesale">卸出荷入力</a></li>
           <li><a href="?view=ec">EC出荷入力(Yahoo!・Amazon・楽天・Shopify)</a></li>
+          <li><a href="?view=ec-import">助ネコCSV取込(EC出荷をまとめて反映)</a></li>
         </ul>
       </div>
       <div class="card">
@@ -337,21 +334,16 @@ async function loadWholesaleBody(date, destinationId, category) {
 
 async function renderEcPage() {
   const date = todayStr();
-  const mallOptions = MALLS.map((m) => `<option value="${m.slug}">${escapeHtml(m.name)}</option>`).join('');
   app.innerHTML = `
     <div class="page">
       ${backLinkHtml()}
       <h1>EC出荷入力</h1>
-      <p class="hint">日付とモールを選び、出荷した個数を商品ごとに入力してください。同じ日付・モールを選び直すと、これまでの入力内容が読み込まれます。</p>
+      <p class="hint">日付を選び、Yahoo!・Amazon・楽天・Shopifyなどモールを問わず合計した出荷個数を商品ごとに入力してください。同じ日付を選び直すと、これまでの入力内容が読み込まれます。まとめて取り込みたい場合は<a href="?view=ec-import">助ネコCSV取込</a>も使えます。</p>
       <div class="card">
         <div class="field-row">
           <div class="field">
             <label for="ec-date">日付</label>
             <input type="date" id="ec-date" value="${date}">
-          </div>
-          <div class="field">
-            <label for="ec-mall">モール</label>
-            <select id="ec-mall">${mallOptions}</select>
           </div>
           <div class="field">
             <label for="ec-category">カテゴリ</label>
@@ -364,11 +356,9 @@ async function renderEcPage() {
       <div class="msg" id="ec-msg"></div>
     </div>`;
   const dateInput = document.getElementById('ec-date');
-  const mallSelect = document.getElementById('ec-mall');
   const categorySelect = document.getElementById('ec-category');
-  const reload = () => loadEcBody(dateInput.value, mallSelect.value, categorySelect.value);
+  const reload = () => loadEcBody(dateInput.value, EC_MALL_ALL, categorySelect.value);
   dateInput.addEventListener('change', reload);
-  mallSelect.addEventListener('change', reload);
   categorySelect.addEventListener('change', reload);
   await reload();
 }
@@ -640,23 +630,13 @@ async function loadStockBody(category, monthStr) {
   }
 }
 
-function showStockDetail(date, productId, { products, rows, wholesaleRows, ecRows, allDestinations }) {
+function showStockDetail(date, productId, { products, rows, wholesaleRows, allDestinations }) {
   const detailEl = document.getElementById('stock-detail');
   const product = products.find((p) => p.id === productId);
   const productIdx = products.findIndex((p) => p.id === productId);
   const row = rows.find((r) => r.date === date);
   if (!detailEl || !product || !row) return;
   const cell = row.cells[productIdx];
-
-  const ecByMall = {};
-  ecRows.forEach((r) => {
-    if (r.ship_date === date && r.product_id === productId) {
-      ecByMall[r.mall] = (ecByMall[r.mall] || 0) + Number(r.qty);
-    }
-  });
-  const ecRowsHtml = MALLS.map(
-    (m) => `<div class="qty-row"><span class="qty-name">${escapeHtml(m.name)}</span><span>${ecByMall[m.slug] || 0}</span></div>`
-  ).join('');
 
   const wsByDest = {};
   wholesaleRows.forEach((r) => {
@@ -681,9 +661,7 @@ function showStockDetail(date, productId, { products, rows, wholesaleRows, ecRow
       <h2 style="margin:0">${formatDateJp(date)} ${escapeHtml(product.name)} の明細</h2>
       <button class="btn-plain" id="stock-detail-close">閉じる</button>
     </div>
-    <p class="hint">製造: ${cell.production} / 在庫(この日時点): ${cell.stock}</p>
-    <h2 class="section-title">EC出荷内訳</h2>
-    ${ecRowsHtml}
+    <p class="hint">製造: ${cell.production} / EC出荷(モール合計): ${cell.ec} / 在庫(この日時点): ${cell.stock}</p>
     <h2 class="section-title">卸出荷内訳</h2>
     ${wsRowsHtml}`;
   detailEl.style.display = '';
@@ -992,6 +970,347 @@ function toggleDestinationEditForm(id, destinations) {
       msg.className = 'msg msg-error';
     }
   });
+}
+
+// ---- 助ネコCSV取込 ----
+
+function normalizeDigits(str) {
+  return String(str ?? '').replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xff10 + 0x30));
+}
+
+// 簡易CSVパーサ("..."で囲まれたフィールド、""でのエスケープ、フィールド内改行に対応)
+function parseCsvText(text) {
+  const rows = [];
+  let row = [];
+  let field = '';
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += c;
+      }
+    } else if (c === '"') {
+      inQuotes = true;
+    } else if (c === ',') {
+      row.push(field);
+      field = '';
+    } else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(field);
+      field = '';
+      if (row.length > 1 || row[0] !== '') rows.push(row);
+      row = [];
+    } else {
+      field += c;
+    }
+  }
+  if (field !== '' || row.length) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows;
+}
+
+// ヘッダー行から列名→インデックスを引き、行オブジェクトの配列にする。列名は部分一致で探す。
+function csvRowsToObjects(rows) {
+  if (!rows.length) return [];
+  const header = rows[0];
+  const findCol = (needle) => header.findIndex((h) => h.includes(needle));
+  const idx = {
+    name: findCol('商品'),
+    qty: findCol('個数') >= 0 ? findCol('個数') : findCol('数量'),
+    date: findCol('発送') >= 0 ? findCol('発送') : findCol('日'),
+    orderNo: findCol('受注番号') >= 0 ? findCol('受注番号') : findCol('注文'),
+  };
+  return rows
+    .slice(1)
+    .filter((r) => r.some((v) => v !== ''))
+    .map((r) => ({
+      name: idx.name >= 0 ? r[idx.name] || '' : '',
+      qty: idx.qty >= 0 ? Number(r[idx.qty]) || 0 : 0,
+      date: idx.date >= 0 ? (r[idx.date] || '').trim().replace(/\//g, '-') : '',
+      orderNo: idx.orderNo >= 0 ? r[idx.orderNo] || '' : '',
+    }));
+}
+
+// 「(1枚目:1.マルゲリータ、2枚目:2.４種のチーズ…)」のような福袋商品のタイトルから、
+// 各枚のフレーバー番号・フレーバー名を抜き出す。福袋でなければnullを返す。
+function extractBundleFlavors(rawText) {
+  // 全角数字混じりの表記(「７バジルソース…」のようにピリオド無しの場合もある)に対応するため正規化する。
+  const text = normalizeDigits(rawText);
+  const startIdx = text.search(/\d+枚目[:：]/);
+  if (startIdx === -1) return null;
+  const inner = text.slice(startIdx).replace(/[）)]+$/, '');
+  const segments = inner.split(/[、,]/);
+  const flavors = [];
+  segments.forEach((seg) => {
+    // 「1.マルゲリータ」(ピリオドあり)と「７バジルソース…」(ピリオドなし)の両方に対応
+    const m = seg.match(/\d+枚目[:：](\d+)[.．]?(.+)/);
+    if (m) flavors.push({ flavorNum: Number(m[1]), text: m[2].trim() });
+  });
+  return flavors.length ? flavors : null;
+}
+
+function detectBundleCategory(fullText) {
+  if (fullText.includes('クリスピー')) return '新みちのくクリスピー';
+  if (fullText.includes('ナポリ')) return '新みちのくナポリ';
+  return null;
+}
+
+// 「ナポリ/クリスピー ○インチ」「玉生地 ○g」のような単純な商品名から、ピザ生地カテゴリの
+// 商品名(例: 6ナポリ、150玉)を推測する。判断できなければnullを返す。
+function detectSimpleProductName(rawText) {
+  const text = normalizeDigits(rawText);
+  if (text.includes('玉生地')) {
+    const m = text.match(/(\d+)\s*g/);
+    if (m) return { category: 'ピザ生地', name: `${m[1]}玉` };
+  }
+  const sizeMatch = text.match(/(\d+)\s*インチ/);
+  if (sizeMatch) {
+    if (text.includes('クリスピー')) return { category: 'ピザ生地', name: `${sizeMatch[1]}クリスピー` };
+    if (text.includes('ナポリ')) return { category: 'ピザ生地', name: `${sizeMatch[1]}ナポリ` };
+  }
+  return null;
+}
+
+function resolveProductByPrefix(products, category, prefix) {
+  return products.find((p) => p.category === category && p.name.startsWith(String(prefix)));
+}
+
+function resolveProductByCategoryName(products, category, name) {
+  return products.find((p) => p.category === category && p.name === name);
+}
+
+// CSVの行オブジェクト配列から、取込候補のエントリ配列を作る。
+// 個数が0以下の行(クーポン利用など)は取り込まない。
+function buildEcImportEntries(csvRows, products, fallbackDate) {
+  const entries = [];
+  csvRows.forEach((r) => {
+    if (r.qty <= 0) return;
+    const date = r.date || fallbackDate;
+    const rawName = r.name;
+    const bundle = extractBundleFlavors(rawName);
+    if (bundle) {
+      const category = detectBundleCategory(rawName);
+      bundle.forEach((f) => {
+        if (category && f.flavorNum >= 2 && f.flavorNum <= 10) {
+          const product = resolveProductByPrefix(products, category, f.flavorNum);
+          entries.push({
+            date,
+            qty: r.qty,
+            label: `${rawName.slice(0, 24)}…(${f.flavorNum}番目:${f.text})`,
+            productId: product ? product.id : null,
+            cacheKey: product ? null : `${category}::${f.flavorNum}`,
+          });
+        } else {
+          const cacheKey = `${category || 'flavor'}::${f.text}`;
+          entries.push({ date, qty: r.qty, label: f.text, productId: null, cacheKey });
+        }
+      });
+    } else {
+      const simple = detectSimpleProductName(rawName);
+      if (simple) {
+        const product = resolveProductByCategoryName(products, simple.category, simple.name);
+        entries.push({
+          date,
+          qty: r.qty,
+          label: rawName,
+          productId: product ? product.id : null,
+          cacheKey: product ? null : `simple::${simple.category}::${simple.name}`,
+        });
+      } else {
+        entries.push({ date, qty: r.qty, label: rawName, productId: null, cacheKey: rawName });
+      }
+    }
+  });
+  return entries;
+}
+
+async function renderEcImportPage() {
+  app.innerHTML = `
+    <div class="page wide">
+      ${backLinkHtml()}
+      <h1>助ネコCSV取込</h1>
+      <p class="hint">助ネコの受注データ(商品名・個数・発送予定日を含むCSV)を取り込み、EC出荷入力にまとめて反映します。モールは区別せず、合計数量だけを取り込みます。「クーポン利用」など個数がマイナスの行は自動的に無視します。</p>
+      <div class="card">
+        <div class="field">
+          <label for="ec-import-file">CSVファイル</label>
+          <input type="file" id="ec-import-file" accept=".csv">
+        </div>
+        <p class="hint" id="ec-import-file-hint">文字コードはShift-JIS(またはUTF-8)を想定しています。</p>
+      </div>
+      <div id="ec-import-body"></div>
+    </div>`;
+
+  document.getElementById('ec-import-file').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const bodyEl = document.getElementById('ec-import-body');
+    bodyEl.innerHTML = '<p class="hint">読み込み中...</p>';
+    try {
+      const buf = await file.arrayBuffer();
+      let text;
+      try {
+        text = new TextDecoder('shift-jis', { fatal: true }).decode(buf);
+      } catch (e2) {
+        text = new TextDecoder('utf-8').decode(buf);
+      }
+      const csvRows = csvRowsToObjects(parseCsvText(text));
+      if (!csvRows.length) {
+        bodyEl.innerHTML = '<div class="card"><p class="msg-error">CSVの中身を読み取れませんでした。列の形式を確認してください。</p></div>';
+        return;
+      }
+      const [products, mappings] = await Promise.all([fetchProducts(), fetchAllEcImportMappings()]);
+      const mappingByKey = {};
+      mappings.forEach((m) => {
+        mappingByKey[m.source_text] = m.product_id;
+      });
+      const hasDate = csvRows.some((r) => r.date);
+      let fallbackDate = '';
+      if (!hasDate) {
+        fallbackDate = window.prompt('CSVに日付の列がありませんでした。このCSVを何日の出荷分として取り込みますか?(例: 2026-08-29)', todayStr()) || todayStr();
+      }
+      let entries = buildEcImportEntries(csvRows, products, fallbackDate);
+      // キャッシュ済みの対応表を適用
+      entries = entries.map((en) => {
+        if (en.productId || !en.cacheKey) return en;
+        if (Object.prototype.hasOwnProperty.call(mappingByKey, en.cacheKey)) {
+          return { ...en, productId: mappingByKey[en.cacheKey], resolved: true };
+        }
+        return en;
+      });
+      renderEcImportReview(bodyEl, entries, products);
+    } catch (err) {
+      bodyEl.innerHTML = `<p class="msg-error">読み込みに失敗しました: ${escapeHtml(err.message)}</p>`;
+    }
+  });
+}
+
+function renderEcImportReview(bodyEl, entries, products) {
+  // 無視する(product_idがnullで解決済み)のものは除外
+  const activeEntries = entries.filter((en) => !(en.resolved && !en.productId));
+  const unresolvedKeys = [...new Set(activeEntries.filter((en) => !en.productId && en.cacheKey).map((en) => en.cacheKey))];
+  const skippedCount = entries.length - activeEntries.length;
+
+  const productOptionsHtml = (selectedId) =>
+    '<option value="">選択してください</option>' +
+    CATEGORIES.map(
+      (cat) =>
+        `<optgroup label="${escapeHtml(cat)}">${products
+          .filter((p) => p.category === cat)
+          .map((p) => `<option value="${p.id}" ${p.id === selectedId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`)
+          .join('')}</optgroup>`
+    ).join('');
+
+  const unresolvedHtml = unresolvedKeys.length
+    ? unresolvedKeys
+        .map((key) => {
+          const rowsForKey = activeEntries.filter((en) => en.cacheKey === key);
+          const totalQty = rowsForKey.reduce((s, en) => s + en.qty, 0);
+          const sampleLabel = rowsForKey[0].label;
+          return `
+      <div class="qty-row master-row" data-key="${escapeHtml(key)}">
+        <span class="qty-name">${escapeHtml(sampleLabel)}(合計${totalQty}個・${rowsForKey.length}行)</span>
+      </div>
+      <div class="field" style="margin: 0 0 14px;">
+        <select class="ec-import-resolve-select" data-key="${escapeHtml(key)}">
+          <option value="">選択してください</option>
+          <option value="__ignore__">この商品名は無視する(取り込まない)</option>
+          ${productOptionsHtml(null)}
+        </select>
+      </div>`;
+        })
+        .join('')
+    : '<p class="hint">対応が必要な商品名はありません。</p>';
+
+  const resolvedGrouped = {};
+  activeEntries
+    .filter((en) => en.productId)
+    .forEach((en) => {
+      const k = `${en.date}|${en.productId}`;
+      if (!resolvedGrouped[k]) resolvedGrouped[k] = { date: en.date, productId: en.productId, qty: 0 };
+      resolvedGrouped[k].qty += en.qty;
+    });
+  const resolvedRows = Object.values(resolvedGrouped).sort((a, b) => a.date.localeCompare(b.date));
+  const resolvedHtml = resolvedRows.length
+    ? `<div class="table-scroll"><table class="agg-table"><thead><tr><th>日付</th><th>商品</th><th>数量</th></tr></thead><tbody>
+        ${resolvedRows
+          .map((r) => {
+            const p = products.find((x) => x.id === r.productId);
+            return `<tr><td>${escapeHtml(r.date)}</td><td class="row-label">${escapeHtml(p ? p.name : '(不明)')}</td><td>${
+              r.qty
+            }</td></tr>`;
+          })
+          .join('')}
+      </tbody></table></div>`
+    : '<p class="hint">まだ対応済みの商品がありません。</p>';
+
+  bodyEl.innerHTML = `
+    <div class="card">
+      <h2>対応が必要な商品名(${unresolvedKeys.length}件)${skippedCount ? `・無視設定済み${skippedCount}件` : ''}</h2>
+      <p class="hint">助ネコの商品名に対応する在庫管理システムの商品を選んでください。一度選ぶと、次回から自動で対応します。</p>
+      ${unresolvedHtml}
+    </div>
+    <div class="card">
+      <h2>取り込み内容(日付・商品ごとの合計)</h2>
+      ${resolvedHtml}
+      <button class="primary" id="ec-import-confirm-btn" ${unresolvedKeys.length ? 'disabled' : ''}>この内容でEC出荷入力に取り込む</button>
+      <p class="hint" id="ec-import-confirm-hint">${
+        unresolvedKeys.length ? '上の「対応が必要な商品名」を全て解決すると取り込めるようになります。' : ''
+      }</p>
+      <div class="msg" id="ec-import-msg"></div>
+    </div>`;
+
+  bodyEl.querySelectorAll('.ec-import-resolve-select').forEach((sel) => {
+    sel.addEventListener('change', async () => {
+      const key = sel.dataset.key;
+      const val = sel.value;
+      if (!val) return;
+      sel.disabled = true;
+      try {
+        const productId = val === '__ignore__' ? null : val;
+        await saveEcImportMapping(key, productId);
+        const newEntries = entries.map((en) => (en.cacheKey === key ? { ...en, productId, resolved: true } : en));
+        renderEcImportReview(bodyEl, newEntries, products);
+      } catch (e) {
+        sel.disabled = false;
+        alert('保存に失敗しました: ' + e.message);
+      }
+    });
+  });
+
+  const confirmBtn = document.getElementById('ec-import-confirm-btn');
+  if (confirmBtn) {
+    confirmBtn.addEventListener('click', async () => {
+      confirmBtn.disabled = true;
+      const msg = document.getElementById('ec-import-msg');
+      msg.textContent = '取り込み中...';
+      msg.className = 'msg';
+      try {
+        const byDate = {};
+        resolvedRows.forEach((r) => {
+          (byDate[r.date] = byDate[r.date] || []).push({ productId: r.productId, qty: r.qty });
+        });
+        for (const date of Object.keys(byDate)) {
+          await saveEcBatch(date, EC_MALL_ALL, byDate[date]);
+        }
+        msg.textContent = `✓ ${resolvedRows.length}件を取り込みました。`;
+        msg.className = 'msg msg-success';
+      } catch (e) {
+        msg.textContent = '取り込みに失敗しました: ' + e.message;
+        msg.className = 'msg msg-error';
+        confirmBtn.disabled = false;
+      }
+    });
+  }
 }
 
 route();

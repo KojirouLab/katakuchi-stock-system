@@ -53,14 +53,25 @@ create table if not exists wholesale_shipments (
   unique (ship_date, destination_id, product_id)
 );
 
+-- mallは当初モール別(yahoo/amazon/rakuten/shopify)に分けていたが、モール横断で合計数量だけ
+-- 管理する運用に変更したため、常に'all'を使う(列・制約は将来モール別集計が必要になった時のため残す)。
 create table if not exists ec_shipments (
   id uuid primary key default gen_random_uuid(),
   ship_date date not null,
-  mall text not null check (mall in ('yahoo','amazon','rakuten','shopify')),
+  mall text not null check (mall in ('yahoo','amazon','rakuten','shopify','all')),
   product_id uuid not null references products(id),
   qty numeric not null default 0,
   updated_at timestamptz not null default now(),
   unique (ship_date, mall, product_id)
+);
+
+-- 助ネコ(受注管理システム)のCSV取込で、商品名(または福袋の中の1フレーバー名)を
+-- 一度手動でどの商品に対応するか選ぶと、次回以降は自動でマッチングされる。
+create table if not exists ec_import_product_mappings (
+  id uuid primary key default gen_random_uuid(),
+  source_text text not null unique,
+  product_id uuid references products(id), -- nullは「この商品名は無視する(取り込まない)」の意味
+  created_at timestamptz not null default now()
 );
 
 alter table products enable row level security;
@@ -69,6 +80,7 @@ alter table wholesale_destinations enable row level security;
 alter table production_records enable row level security;
 alter table wholesale_shipments enable row level security;
 alter table ec_shipments enable row level security;
+alter table ec_import_product_mappings enable row level security;
 
 -- このアプリはログイン機能を持たず、URLを知っている社内関係者だけが
 -- アクセスできる運用を前提としています。そのため anon キーからの読み書きを
@@ -103,6 +115,11 @@ create policy "ec_shipments anon select" on ec_shipments for select using (true)
 create policy "ec_shipments anon insert" on ec_shipments for insert with check (true);
 create policy "ec_shipments anon update" on ec_shipments for update using (true);
 create policy "ec_shipments anon delete" on ec_shipments for delete using (true);
+
+create policy "ec_import_product_mappings anon select" on ec_import_product_mappings for select using (true);
+create policy "ec_import_product_mappings anon insert" on ec_import_product_mappings for insert with check (true);
+create policy "ec_import_product_mappings anon update" on ec_import_product_mappings for update using (true);
+create policy "ec_import_product_mappings anon delete" on ec_import_product_mappings for delete using (true);
 
 -- 卸出荷先の初期データ(名称が不確かなものもあるため、間違っていたら卸先マスタ管理画面で修正してください)
 -- 一度だけ実行する想定です(name列にunique制約がないため、再実行すると重複登録されます)。

@@ -252,3 +252,21 @@ async function saveEcBatch(date, mall, entries) {
     if (error) throw error;
   }
 }
+
+// ---- 助ネコCSV取込: 商品名 → 自社商品 の対応表 ----
+
+async function fetchAllEcImportMappings() {
+  assertClient();
+  const { data, error } = await sb.from('ec_import_product_mappings').select('*');
+  if (error) throw error;
+  return data || [];
+}
+
+// sourceTextごとにupsert(同じ商品名を後から選び直した場合は上書き)。productIdはnullでもよい(無視する、の意味)。
+async function saveEcImportMapping(sourceText, productId) {
+  assertClient();
+  const { error } = await sb
+    .from('ec_import_product_mappings')
+    .upsert({ source_text: sourceText, product_id: productId }, { onConflict: 'source_text' });
+  if (error) throw error;
+}

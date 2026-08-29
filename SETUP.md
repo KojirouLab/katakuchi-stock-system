@@ -94,6 +94,25 @@ create policy "product_stock_columns anon delete" on product_stock_columns for d
 update products set category = 'ピザ生地' where category = 'ピザ';
 ```
 
+**2026-08-29: EC出荷入力をモール別からモール横断の合計入力に変更、助ネコCSV取込を追加**
+
+```sql
+alter table ec_shipments drop constraint if exists ec_shipments_mall_check;
+alter table ec_shipments add constraint ec_shipments_mall_check check (mall in ('yahoo','amazon','rakuten','shopify','all'));
+
+create table if not exists ec_import_product_mappings (
+  id uuid primary key default gen_random_uuid(),
+  source_text text not null unique,
+  product_id uuid references products(id),
+  created_at timestamptz not null default now()
+);
+alter table ec_import_product_mappings enable row level security;
+create policy "ec_import_product_mappings anon select" on ec_import_product_mappings for select using (true);
+create policy "ec_import_product_mappings anon insert" on ec_import_product_mappings for insert with check (true);
+create policy "ec_import_product_mappings anon update" on ec_import_product_mappings for update using (true);
+create policy "ec_import_product_mappings anon delete" on ec_import_product_mappings for delete using (true);
+```
+
 ## 困ったときは
 
 - 保存や読み込みに失敗する: 画面のエラーメッセージを確認し、通信状況を確認して再度お試しください。
