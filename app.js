@@ -1270,9 +1270,11 @@ function renderEcImportReview(bodyEl, entries, products) {
         ${resolvedRows
           .map((r) => {
             const p = products.find((x) => x.id === r.productId);
-            return `<tr><td>${escapeHtml(r.date)}</td><td class="row-label">${escapeHtml(p ? p.name : '(不明)')}</td><td>${
-              r.qty
-            }</td></tr>`;
+            return `<tr><td>${escapeHtml(r.date)}</td><td class="row-label">${escapeHtml(
+              p ? p.name : '(不明)'
+            )}</td><td><input type="text" inputmode="numeric" pattern="[0-9]*" class="qty-input ec-import-qty-input" data-date="${escapeHtml(
+              r.date
+            )}" data-product-id="${r.productId}" value="${r.qty}" onfocus="this.select()"></td></tr>`;
           })
           .join('')}
       </tbody></table></div>`
@@ -1286,10 +1288,11 @@ function renderEcImportReview(bodyEl, entries, products) {
     </div>
     <div class="card">
       <h2>取り込み内容(日付・商品ごとの合計)</h2>
+      <p class="hint">数量はこの場で書き換えられます。保存した後にもう一度直したい時は、数量を書き換えてもう一度「保存する」を押してください(何度でも押せます)。同じ日付・カテゴリは<a href="?view=ec">EC出荷入力</a>からもいつでも呼び出して直せます。</p>
       ${resolvedHtml}
-      <button class="primary" id="ec-import-confirm-btn" ${unresolvedKeys.length ? 'disabled' : ''}>この内容でEC出荷入力に取り込む</button>
+      <button class="primary" id="ec-import-confirm-btn" ${unresolvedKeys.length ? 'disabled' : ''}>この内容をEC出荷入力に保存する</button>
       <p class="hint" id="ec-import-confirm-hint">${
-        unresolvedKeys.length ? '上の「対応が必要な商品名」を全て解決すると取り込めるようになります。' : ''
+        unresolvedKeys.length ? '上の「対応が必要な商品名」を全て解決すると保存できるようになります。' : ''
       }</p>
       <div class="msg" id="ec-import-msg"></div>
     </div>`;
@@ -1317,22 +1320,29 @@ function renderEcImportReview(bodyEl, entries, products) {
     confirmBtn.addEventListener('click', async () => {
       confirmBtn.disabled = true;
       const msg = document.getElementById('ec-import-msg');
-      msg.textContent = '取り込み中...';
+      msg.textContent = '保存中...';
       msg.className = 'msg';
       try {
+        // その場で書き換えられた数量を、保存直前に読み直す(初回確定後の再修正にも対応するため)
+        const currentRows = [...bodyEl.querySelectorAll('.ec-import-qty-input')].map((el) => ({
+          date: el.dataset.date,
+          productId: el.dataset.productId,
+          qty: Number(el.value) || 0,
+        }));
         const byDate = {};
-        resolvedRows.forEach((r) => {
+        currentRows.forEach((r) => {
           (byDate[r.date] = byDate[r.date] || []).push({ productId: r.productId, qty: r.qty });
         });
         for (const date of Object.keys(byDate)) {
           await saveEcBatch(date, EC_MALL_ALL, byDate[date]);
         }
-        msg.textContent = `✓ ${resolvedRows.length}件を取り込みました。`;
+        msg.textContent = `✓ ${currentRows.length}件を保存しました。数量を直したい時は上の欄を書き換えて、もう一度このボタンを押してください。`;
         msg.className = 'msg msg-success';
       } catch (e) {
-        msg.textContent = '取り込みに失敗しました: ' + e.message;
+        msg.textContent = '保存に失敗しました: ' + e.message;
         msg.className = 'msg msg-error';
-        confirmBtn.disabled = false;
+      } finally {
+        confirmBtn.disabled = !!unresolvedKeys.length;
       }
     });
   }
