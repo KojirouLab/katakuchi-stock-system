@@ -1066,17 +1066,34 @@ function detectBundleCategory(fullText) {
 }
 
 // 「ナポリ/クリスピー ○インチ」「玉生地 ○g」のような単純な商品名から、ピザ生地カテゴリの
-// 商品名(例: 6ナポリ、150玉)を推測する。判断できなければnullを返す。
+// 商品名(例: 6ナポリ、150玉)と、1個あたりの入り数(枚数/個数)を推測する。
+// 「入り数:5枚」「100個入り」「5枚セット」等、1回の注文(個数)で実際に何枚/何個
+// 出庫されるかを表す倍率。見つからなければ1(=個数がそのまま枚数/個数)とする。
+// 判断できなければnullを返す。
 function detectSimpleProductName(rawText) {
   const text = normalizeDigits(rawText);
   if (text.includes('玉生地')) {
-    const m = text.match(/(\d+)\s*g/);
-    if (m) return { category: 'ピザ生地', name: `${m[1]}玉` };
+    // 「130 150 180 200g」のようなタイトル冒頭のサイズ一覧に引きずられないよう、
+    // 「サイズ:150g」の明示指定があればそちらを優先する。
+    let weightMatch = text.match(/サイズ[:：]\s*(\d+)\s*g/);
+    if (!weightMatch) weightMatch = text.match(/(\d+)\s*g/);
+    if (weightMatch) {
+      const countMatch =
+        text.match(/入り数[:：]\s*(\d+)\s*個/) || text.match(/\d+\s*g\D{0,6}?(\d+)\s*個/) || text.match(/(\d+)\s*個入り/);
+      const multiplier = countMatch ? Number(countMatch[1]) : 1;
+      return { category: 'ピザ生地', name: `${weightMatch[1]}玉`, multiplier };
+    }
   }
-  const sizeMatch = text.match(/(\d+)\s*インチ/);
+  // 「6 8 10 12インチ」のようなタイトル冒頭のサイズ一覧に引きずられないよう、
+  // 「サイズ:10インチ」の明示指定があればそちらを優先する。
+  let sizeMatch = text.match(/サイズ[:：]\s*(\d+)\s*インチ/);
+  if (!sizeMatch) sizeMatch = text.match(/(\d+)\s*インチ/);
   if (sizeMatch) {
-    if (text.includes('クリスピー')) return { category: 'ピザ生地', name: `${sizeMatch[1]}クリスピー` };
-    if (text.includes('ナポリ')) return { category: 'ピザ生地', name: `${sizeMatch[1]}ナポリ` };
+    const countMatch =
+      text.match(/入り数[:：]\s*(\d+)\s*枚/) || text.match(/(\d+)\s*枚入り/) || text.match(/(\d+)\s*枚セット/);
+    const multiplier = countMatch ? Number(countMatch[1]) : 1;
+    if (text.includes('クリスピー')) return { category: 'ピザ生地', name: `${sizeMatch[1]}クリスピー`, multiplier };
+    if (text.includes('ナポリ')) return { category: 'ピザ生地', name: `${sizeMatch[1]}ナポリ`, multiplier };
   }
   return null;
 }
@@ -1119,10 +1136,11 @@ function buildEcImportEntries(csvRows, products, fallbackDate) {
       const simple = detectSimpleProductName(rawName);
       if (simple) {
         const product = resolveProductByCategoryName(products, simple.category, simple.name);
+        const multiplier = simple.multiplier || 1;
         entries.push({
           date,
-          qty: r.qty,
-          label: rawName,
+          qty: r.qty * multiplier,
+          label: multiplier > 1 ? `${rawName}(注文${r.qty}件 × 入り${multiplier} = ${r.qty * multiplier})` : rawName,
           productId: product ? product.id : null,
           cacheKey: product ? null : `simple::${simple.category}::${simple.name}`,
         });
