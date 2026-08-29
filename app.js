@@ -1223,8 +1223,8 @@ function renderEcImportReview(bodyEl, entries, products) {
       <div class="field" style="margin: 0 0 14px;">
         <select class="ec-import-resolve-select" data-key="${escapeHtml(key)}">
           <option value="">選択してください</option>
-          <option value="__ignore__">この商品名は無視する(取り込まない)</option>
-          ${productOptionsHtml(null)}
+          <option value="__ignore__">在庫管理外商品(このシステムでは扱わない・取り込まない)</option>
+          ${productOptionsHtml(null).replace('<option value="">選択してください</option>', '')}
         </select>
       </div>`;
         })
@@ -1255,7 +1255,7 @@ function renderEcImportReview(bodyEl, entries, products) {
 
   bodyEl.innerHTML = `
     <div class="card">
-      <h2>対応が必要な商品名(${unresolvedKeys.length}件)${skippedCount ? `・無視設定済み${skippedCount}件` : ''}</h2>
+      <h2>対応が必要な商品名(${unresolvedKeys.length}件)${skippedCount ? `・在庫管理外に設定済み${skippedCount}件` : ''}</h2>
       <p class="hint">助ネコの商品名に対応する在庫管理システムの商品を選んでください。一度選ぶと、次回から自動で対応します。</p>
       ${unresolvedHtml}
     </div>
