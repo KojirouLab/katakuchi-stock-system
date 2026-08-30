@@ -1068,6 +1068,19 @@ function detectBundleCategory(fullText) {
   return null;
 }
 
+// 「10枚バラエティセット」「全10種類 おまかせ」のように、枚ごとのフレーバー指定(1枚目:…)が
+// 無いまま「全種類を1個ずつ」詰め合わせる商品タイトルを検出する。該当すれば対象カテゴリを返す。
+function detectFixedVarietySet(rawText) {
+  if (extractBundleFlavors(rawText)) return null; // 枚ごとの選択がある場合はそちらを優先
+  const text = normalizeDigits(rawText);
+  const hasVarietyWord = /バラエティセット|全10種類|おまかせ/.test(text);
+  const has10 = /10枚|10種類/.test(text);
+  if (!hasVarietyWord || !has10) return null;
+  if (text.includes('クリスピー')) return '新みちのくクリスピー';
+  if (text.includes('ナポリ')) return '新みちのくナポリ';
+  return null;
+}
+
 // 「入り数:5枚」「100個入り」「5枚セット」「50個セット」等、1回の注文(個数)で実際に
 // 何枚/何個出庫されるかを表す倍率をタイトルから探す。見つからなければ1を返す。
 // 入り数(倍率)と、それが「入り数:」等の明示表記から確実に読み取れたか(confident)を返す。
@@ -1154,22 +1167,45 @@ function buildEcImportEntries(csvRows, products, fallbackDate) {
         }
       });
     } else {
-      // 助ネコの商品コードは複数サイズ/複数商品で使い回されていることがあり、
-      // コード名を信用できないと判断されたため、商品コードはマッチングには使わず、
-      // タイトル解析(だめなら商品名そのものでユーザーに確認)だけに一本化する。
-      const simple = detectSimpleProductName(rawName);
-      if (simple) {
-        const product = resolveProductByCategoryName(products, simple.category, simple.name);
-        const multiplier = simple.multiplier || 1;
-        entries.push({
-          date,
-          qty: r.qty * multiplier,
-          label: multiplier > 1 ? `${rawName}(注文${r.qty}件 × 入り${multiplier} = ${r.qty * multiplier})` : rawName,
-          productId: product ? product.id : null,
-          cacheKey: product ? null : `simple::${simple.category}::${simple.name}`,
-        });
+      const varietyCategory = detectFixedVarietySet(rawName);
+      if (varietyCategory) {
+        // 枚ごとの選択肢が無い「全種類1個ずつ」の詰め合わせ。番号1〜10の商品にそれぞれ
+        // 1個ずつ割り振る(1番はマルゲリータで番号プレフィックスが無いためキャッシュ経由)。
+        for (let flavorNum = 1; flavorNum <= 10; flavorNum += 1) {
+          let product = null;
+          let cacheKey;
+          if (flavorNum === 1) {
+            cacheKey = `${varietyCategory}::マルゲリータ`;
+          } else {
+            product = resolveProductByPrefix(products, varietyCategory, flavorNum);
+            cacheKey = product ? null : `${varietyCategory}::${flavorNum}`;
+          }
+          entries.push({
+            date,
+            qty: r.qty,
+            label: `${rawName.slice(0, 24)}…(${flavorNum}番目/全10種)`,
+            productId: product ? product.id : null,
+            cacheKey,
+          });
+        }
       } else {
-        entries.push({ date, qty: r.qty, label: rawName, productId: null, cacheKey: rawName });
+        // 助ネコの商品コードは複数サイズ/複数商品で使い回されていることがあり、
+        // コード名を信用できないと判断されたため、商品コードはマッチングには使わず、
+        // タイトル解析(だめなら商品名そのものでユーザーに確認)だけに一本化する。
+        const simple = detectSimpleProductName(rawName);
+        if (simple) {
+          const product = resolveProductByCategoryName(products, simple.category, simple.name);
+          const multiplier = simple.multiplier || 1;
+          entries.push({
+            date,
+            qty: r.qty * multiplier,
+            label: multiplier > 1 ? `${rawName}(注文${r.qty}件 × 入り${multiplier} = ${r.qty * multiplier})` : rawName,
+            productId: product ? product.id : null,
+            cacheKey: product ? null : `simple::${simple.category}::${simple.name}`,
+          });
+        } else {
+          entries.push({ date, qty: r.qty, label: rawName, productId: null, cacheKey: rawName });
+        }
       }
     }
   });
