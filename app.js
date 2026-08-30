@@ -1070,29 +1070,38 @@ function detectBundleCategory(fullText) {
 
 // 「入り数:5枚」「100個入り」「5枚セット」「50個セット」等、1回の注文(個数)で実際に
 // 何枚/何個出庫されるかを表す倍率をタイトルから探す。見つからなければ1を返す。
-function detectMultiplier(rawText) {
+// 入り数(倍率)と、それが「入り数:」等の明示表記から確実に読み取れたか(confident)を返す。
+// 明示表記が無く1をデフォルトにした場合はconfident:falseになる。
+function detectMultiplierInfo(rawText) {
   const text = normalizeDigits(rawText);
   const m =
     text.match(/入り数[:：]\s*(\d+)\s*[枚個]/) ||
     text.match(/(\d+)\s*[枚個]入り/) ||
     text.match(/(\d+)\s*枚セット/) ||
     text.match(/(\d+)\s*個セット/);
-  return m ? Number(m[1]) : 1;
+  return { value: m ? Number(m[1]) : 1, confident: !!m };
+}
+
+function detectMultiplier(rawText) {
+  return detectMultiplierInfo(rawText).value;
 }
 
 // 「ナポリ/クリスピー ○インチ」「玉生地 ○g」のような単純な商品名から、ピザ生地カテゴリの
 // 商品名(例: 6ナポリ、150玉)と、1個あたりの入り数(枚数/個数)を推測する。
+// 商品コード(例: gyoumu_tama150g)は複数サイズで使い回されていることがあり、コード名を
+// 鵜呑みにできないため、confidentMultiplier(入り数を明示表記から確実に読み取れたか)も
+// 一緒に返す。商品コードがあってもconfidentMultiplierがtrueならタイトル解析を優先する。
 // 判断できなければnullを返す。
 function detectSimpleProductName(rawText) {
   const text = normalizeDigits(rawText);
-  const multiplier = detectMultiplier(rawText);
+  const { value: multiplier, confident: confidentMultiplier } = detectMultiplierInfo(rawText);
   if (text.includes('玉生地')) {
     // 「130 150 180 200g」のようなタイトル冒頭のサイズ一覧に引きずられないよう、
     // 「サイズ:150g」の明示指定があればそちらを優先する。
     let weightMatch = text.match(/サイズ[:：]\s*(\d+)\s*g/);
     if (!weightMatch) weightMatch = text.match(/(\d+)\s*g/);
     if (weightMatch) {
-      return { category: 'ピザ生地', name: `${weightMatch[1]}玉`, multiplier };
+      return { category: 'ピザ生地', name: `${weightMatch[1]}玉`, multiplier, confidentMultiplier };
     }
   }
   // 「6 8 10 12インチ」のようなタイトル冒頭のサイズ一覧に引きずられないよう、
@@ -1100,8 +1109,8 @@ function detectSimpleProductName(rawText) {
   let sizeMatch = text.match(/サイズ[:：]\s*(\d+)\s*インチ/);
   if (!sizeMatch) sizeMatch = text.match(/(\d+)\s*インチ/);
   if (sizeMatch) {
-    if (text.includes('クリスピー')) return { category: 'ピザ生地', name: `${sizeMatch[1]}クリスピー`, multiplier };
-    if (text.includes('ナポリ')) return { category: 'ピザ生地', name: `${sizeMatch[1]}ナポリ`, multiplier };
+    if (text.includes('クリスピー')) return { category: 'ピザ生地', name: `${sizeMatch[1]}クリスピー`, multiplier, confidentMultiplier };
+    if (text.includes('ナポリ')) return { category: 'ピザ生地', name: `${sizeMatch[1]}ナポリ`, multiplier, confidentMultiplier };
   }
   return null;
 }
@@ -1147,24 +1156,13 @@ function buildEcImportEntries(csvRows, products, fallbackDate) {
           entries.push({ date, qty: r.qty, label: f.text, productId: null, cacheKey });
         }
       });
-    } else if (r.code) {
-      // 商品コード(助ネコのSKU)があれば、それを最優先の手がかりにする。商品名は
-      // セールごとに変わりやすいが、コードは基本的に変わらないため一度対応させれば
-      // 以降ずっと自動でマッチする。入り数の倍率だけはタイトルから引き続き推測する。
-      const multiplier = detectMultiplier(rawName);
-      entries.push({
-        date,
-        qty: r.qty * multiplier,
-        label:
-          multiplier > 1
-            ? `[${r.code}] ${rawName}(注文${r.qty}件 × 入り${multiplier} = ${r.qty * multiplier})`
-            : `[${r.code}] ${rawName}`,
-        productId: null,
-        cacheKey: `sku::${r.code}`,
-      });
     } else {
       const simple = detectSimpleProductName(rawName);
-      if (simple) {
+      // 商品コード(助ネコのSKU)は基本的に商品名より安定しているため優先したいが、
+      // 「gyoumu_tama150g」のように複数サイズで使い回されているコードもあり、
+      // コード名を鵜呑みにできない。タイトルから「入り数:○個」等を確実に読み取れた
+      // 時(confidentMultiplier)は、コードよりタイトル解析を優先する。
+      if (simple && (simple.confidentMultiplier || !r.code)) {
         const product = resolveProductByCategoryName(products, simple.category, simple.name);
         const multiplier = simple.multiplier || 1;
         entries.push({
@@ -1173,6 +1171,20 @@ function buildEcImportEntries(csvRows, products, fallbackDate) {
           label: multiplier > 1 ? `${rawName}(注文${r.qty}件 × 入り${multiplier} = ${r.qty * multiplier})` : rawName,
           productId: product ? product.id : null,
           cacheKey: product ? null : `simple::${simple.category}::${simple.name}`,
+        });
+      } else if (r.code) {
+        // タイトルから入り数を確信を持って読み取れなかった場合(例: 福袋やセット商品で
+        // 表記が崩れている場合)は、商品コードで一度だけユーザーに確認してもらう。
+        const multiplier = detectMultiplier(rawName);
+        entries.push({
+          date,
+          qty: r.qty * multiplier,
+          label:
+            multiplier > 1
+              ? `[${r.code}] ${rawName}(注文${r.qty}件 × 入り${multiplier} = ${r.qty * multiplier})`
+              : `[${r.code}] ${rawName}`,
+          productId: null,
+          cacheKey: `sku::${r.code}`,
         });
       } else {
         entries.push({ date, qty: r.qty, label: rawName, productId: null, cacheKey: rawName });
