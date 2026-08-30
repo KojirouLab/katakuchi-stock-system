@@ -262,11 +262,17 @@ async function fetchAllEcImportMappings() {
   return data || [];
 }
 
-// sourceTextごとにupsert(同じ商品名を後から選び直した場合は上書き)。productIdはnullでもよい(無視する、の意味)。
-async function saveEcImportMapping(sourceText, productId) {
+// sourceTextの対応を保存する。productIdsが空配列なら「在庫管理外(取り込まない)」の意味で
+// product_id=nullの1件を保存する。2件以上渡すと、セット商品などで1つの商品名が複数商品
+// (1個ずつ)の詰め合わせであることを表し、同じsource_textで複数行保存する。
+// 選び直しに対応するため、保存前に同じsource_textの既存行を全て削除してから入れ直す。
+async function saveEcImportMappings(sourceText, productIds) {
   assertClient();
-  const { error } = await sb
-    .from('ec_import_product_mappings')
-    .upsert({ source_text: sourceText, product_id: productId }, { onConflict: 'source_text' });
+  const { error: delError } = await sb.from('ec_import_product_mappings').delete().eq('source_text', sourceText);
+  if (delError) throw delError;
+  const rows = productIds.length
+    ? productIds.map((productId) => ({ source_text: sourceText, product_id: productId }))
+    : [{ source_text: sourceText, product_id: null }];
+  const { error } = await sb.from('ec_import_product_mappings').insert(rows);
   if (error) throw error;
 }

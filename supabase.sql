@@ -67,11 +67,14 @@ create table if not exists ec_shipments (
 
 -- 助ネコ(受注管理システム)のCSV取込で、商品名(または福袋の中の1フレーバー名)を
 -- 一度手動でどの商品に対応するか選ぶと、次回以降は自動でマッチングされる。
+-- セット商品など、1つの商品名が複数商品(1個ずつ)の詰め合わせの場合は、
+-- 同じsource_textで複数行登録できる(source_text単独ではuniqueにしない)。
 create table if not exists ec_import_product_mappings (
   id uuid primary key default gen_random_uuid(),
-  source_text text not null unique,
+  source_text text not null,
   product_id uuid references products(id), -- nullは「この商品名は無視する(取り込まない)」の意味
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  unique (source_text, product_id)
 );
 
 alter table products enable row level security;

@@ -113,6 +113,15 @@ create policy "ec_import_product_mappings anon update" on ec_import_product_mapp
 create policy "ec_import_product_mappings anon delete" on ec_import_product_mappings for delete using (true);
 ```
 
+**2026-08-31: 助ネコCSV取込で、1つの商品名に複数商品(セット商品など)を対応付けられるように変更**
+
+`ec_import_product_mappings`の`source_text`単独のunique制約を外し、`(source_text, product_id)`の組み合わせでuniqueにします。これにより同じ商品名で複数行(=複数商品を1個ずつ)を登録できるようになります。
+
+```sql
+alter table ec_import_product_mappings drop constraint if exists ec_import_product_mappings_source_text_key;
+alter table ec_import_product_mappings add constraint ec_import_product_mappings_source_text_product_id_key unique (source_text, product_id);
+```
+
 ## 困ったときは
 
 - 保存や読み込みに失敗する: 画面のエラーメッセージを確認し、通信状況を確認して再度お試しください。

@@ -1212,6 +1212,33 @@ function buildEcImportEntries(csvRows, products, fallbackDate) {
   return entries;
 }
 
+// 1つのcacheKeyに対応付けられた商品ID配列(productIds)から、entryを複製して返す。
+// セット商品など複数商品(1個ずつ)が対応付けられている場合は商品の数だけ複製する。
+// 空配列(在庫管理外)ならproductId:nullで1件返す。
+function expandEntryForProductIds(en, productIds) {
+  const ids = (productIds || []).filter((id) => id);
+  if (!ids.length) return [{ ...en, productId: null, resolved: true }];
+  return ids.map((pid, i) => ({
+    ...en,
+    productId: pid,
+    resolved: true,
+    label: ids.length > 1 ? `${en.label}(${i + 1}/${ids.length}種)` : en.label,
+  }));
+}
+
+// 学習キャッシュ(cacheKey→商品ID配列)をentries配列に適用する。
+function applyEcImportMappings(entries, mappingsByKey) {
+  const result = [];
+  entries.forEach((en) => {
+    if (en.productId || !en.cacheKey || !mappingsByKey.has(en.cacheKey)) {
+      result.push(en);
+      return;
+    }
+    result.push(...expandEntryForProductIds(en, mappingsByKey.get(en.cacheKey)));
+  });
+  return result;
+}
+
 async function renderEcImportPage() {
   app.innerHTML = `
     <div class="page wide">
@@ -1247,9 +1274,11 @@ async function renderEcImportPage() {
         return;
       }
       const [products, mappings] = await Promise.all([fetchProducts(), fetchAllEcImportMappings()]);
-      const mappingByKey = {};
+      const mappingsByKey = new Map();
       mappings.forEach((m) => {
-        mappingByKey[m.source_text] = m.product_id;
+        const arr = mappingsByKey.get(m.source_text) || [];
+        arr.push(m.product_id);
+        mappingsByKey.set(m.source_text, arr);
       });
       const hasDate = csvRows.some((r) => r.date);
       let fallbackDate = '';
@@ -1258,13 +1287,7 @@ async function renderEcImportPage() {
       }
       let entries = buildEcImportEntries(csvRows, products, fallbackDate);
       // キャッシュ済みの対応表を適用
-      entries = entries.map((en) => {
-        if (en.productId || !en.cacheKey) return en;
-        if (Object.prototype.hasOwnProperty.call(mappingByKey, en.cacheKey)) {
-          return { ...en, productId: mappingByKey[en.cacheKey], resolved: true };
-        }
-        return en;
-      });
+      entries = applyEcImportMappings(entries, mappingsByKey);
       renderEcImportReview(bodyEl, entries, products);
     } catch (err) {
       bodyEl.innerHTML = `<p class="msg-error">読み込みに失敗しました: ${escapeHtml(err.message)}</p>`;
@@ -1290,20 +1313,28 @@ function renderEcImportReview(bodyEl, entries, products) {
 
   const unresolvedHtml = unresolvedKeys.length
     ? unresolvedKeys
-        .map((key) => {
+        .map((key, idx) => {
           const rowsForKey = activeEntries.filter((en) => en.cacheKey === key);
           const totalQty = rowsForKey.reduce((s, en) => s + en.qty, 0);
           const sampleLabel = rowsForKey[0].label;
           return `
-      <div class="qty-row master-row" data-key="${escapeHtml(key)}">
-        <span class="qty-name">${escapeHtml(sampleLabel)}(合計${totalQty}個・${rowsForKey.length}行)</span>
-      </div>
-      <div class="field" style="margin: 0 0 14px;">
-        <select class="ec-import-resolve-select" data-key="${escapeHtml(key)}">
-          <option value="">選択してください</option>
-          <option value="__ignore__">在庫管理外商品(このシステムでは扱わない・取り込まない)</option>
-          ${productOptionsHtml(null).replace('<option value="">選択してください</option>', '')}
-        </select>
+      <div class="ec-import-unresolved-item" data-idx="${idx}">
+        <div class="qty-row master-row">
+          <span class="qty-name">${escapeHtml(sampleLabel)}(合計${totalQty}個・${rowsForKey.length}行)</span>
+        </div>
+        <div class="field" style="margin: 0 0 8px;">
+          <label>この商品名は何種類の商品ですか?(セット商品などで複数商品を1個ずつ計上したい場合は2種類以上を選んでください)</label>
+          <select class="ec-import-count-select">
+            <option value="">選択してください</option>
+            <option value="0">在庫管理外(取り込まない)</option>
+            <option value="1">1種類(通常の1商品)</option>
+            <option value="2">2種類(1つずつ)</option>
+            <option value="3">3種類(1つずつ)</option>
+            <option value="4">4種類(1つずつ)</option>
+          </select>
+        </div>
+        <div class="ec-import-product-slots"></div>
+        <button class="btn-plain ec-import-resolve-confirm" type="button" style="display:none;margin-bottom:14px;">この内容で確定する</button>
       </div>`;
         })
         .join('')
@@ -1336,7 +1367,7 @@ function renderEcImportReview(bodyEl, entries, products) {
   bodyEl.innerHTML = `
     <div class="card">
       <h2>対応が必要な商品名(${unresolvedKeys.length}件)${skippedCount ? `・在庫管理外に設定済み${skippedCount}件` : ''}</h2>
-      <p class="hint">助ネコの商品名に対応する在庫管理システムの商品を選んでください。一度選ぶと、次回から自動で対応します。</p>
+      <p class="hint">助ネコの商品名に対応する在庫管理システムの商品を選んでください。セット商品などで1つの商品名が複数商品(1個ずつ)の詰め合わせになっている場合は、種類数を2以上にして内訳を指定できます。一度選ぶと、次回から自動で対応します。</p>
       ${unresolvedHtml}
     </div>
     <div class="card">
@@ -1350,19 +1381,65 @@ function renderEcImportReview(bodyEl, entries, products) {
       <div class="msg" id="ec-import-msg"></div>
     </div>`;
 
-  bodyEl.querySelectorAll('.ec-import-resolve-select').forEach((sel) => {
-    sel.addEventListener('change', async () => {
-      const key = sel.dataset.key;
-      const val = sel.value;
-      if (!val) return;
-      sel.disabled = true;
+  bodyEl.querySelectorAll('.ec-import-unresolved-item').forEach((item) => {
+    const idx = Number(item.dataset.idx);
+    const key = unresolvedKeys[idx];
+    const countSel = item.querySelector('.ec-import-count-select');
+    const slotsEl = item.querySelector('.ec-import-product-slots');
+    const confirmBtn = item.querySelector('.ec-import-resolve-confirm');
+
+    countSel.addEventListener('change', () => {
+      const val = countSel.value;
+      if (!val) {
+        slotsEl.innerHTML = '';
+        confirmBtn.style.display = 'none';
+        return;
+      }
+      const n = Number(val);
+      if (n === 0) {
+        slotsEl.innerHTML = '<p class="hint">この商品名は在庫管理外として扱い、取り込みません。</p>';
+      } else {
+        slotsEl.innerHTML = Array.from(
+          { length: n },
+          (_, i) => `
+          <div class="field" style="margin: 0 0 8px;">
+            <label>${n > 1 ? `${i + 1}種類目の商品` : '商品'}</label>
+            <select class="ec-import-slot-select">${productOptionsHtml(null)}</select>
+          </div>`
+        ).join('');
+      }
+      confirmBtn.style.display = '';
+    });
+
+    confirmBtn.addEventListener('click', async () => {
+      const n = Number(countSel.value);
+      let productIds;
+      if (n === 0) {
+        productIds = [];
+      } else {
+        const values = [...slotsEl.querySelectorAll('.ec-import-slot-select')].map((s) => s.value);
+        if (values.some((v) => !v)) {
+          alert('すべての種類で商品を選択してください。');
+          return;
+        }
+        productIds = values;
+      }
+      confirmBtn.disabled = true;
+      countSel.disabled = true;
       try {
-        const productId = val === '__ignore__' ? null : val;
-        await saveEcImportMapping(key, productId);
-        const newEntries = entries.map((en) => (en.cacheKey === key ? { ...en, productId, resolved: true } : en));
+        await saveEcImportMappings(key, productIds);
+        const newEntries = [];
+        entries.forEach((en) => {
+          if (en.cacheKey !== key) {
+            newEntries.push(en);
+            return;
+          }
+          newEntries.push(...expandEntryForProductIds(en, productIds));
+        });
         renderEcImportReview(bodyEl, newEntries, products);
       } catch (e) {
-        sel.disabled = false;
+        confirmBtn.disabled = false;
+        countSel.disabled = false;
         alert('保存に失敗しました: ' + e.message);
       }
     });
