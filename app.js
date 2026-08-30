@@ -1025,7 +1025,9 @@ function csvRowsToObjects(rows) {
   const header = rows[0];
   const findCol = (needle) => header.findIndex((h) => h.includes(needle));
   const idx = {
-    name: findCol('商品'),
+    // 「商品コード(店舗)」列にも「商品」の文字が含まれるため、先に「商品名」で厳密に探す
+    name: findCol('商品名') >= 0 ? findCol('商品名') : findCol('商品'),
+    code: findCol('コード'),
     qty: findCol('個数') >= 0 ? findCol('個数') : findCol('数量'),
     date: findCol('発送') >= 0 ? findCol('発送') : findCol('日'),
     orderNo: findCol('受注番号') >= 0 ? findCol('受注番号') : findCol('注文'),
@@ -1035,6 +1037,7 @@ function csvRowsToObjects(rows) {
     .filter((r) => r.some((v) => v !== ''))
     .map((r) => ({
       name: idx.name >= 0 ? normalizeForMatch(r[idx.name] || '') : '',
+      code: idx.code >= 0 ? normalizeForMatch((r[idx.code] || '').trim()) : '',
       qty: idx.qty >= 0 ? Number(r[idx.qty]) || 0 : 0,
       date: idx.date >= 0 ? (r[idx.date] || '').trim().replace(/\//g, '-') : '',
       orderNo: idx.orderNo >= 0 ? r[idx.orderNo] || '' : '',
@@ -1065,22 +1068,30 @@ function detectBundleCategory(fullText) {
   return null;
 }
 
+// 「入り数:5枚」「100個入り」「5枚セット」「50個セット」等、1回の注文(個数)で実際に
+// 何枚/何個出庫されるかを表す倍率をタイトルから探す。見つからなければ1を返す。
+function detectMultiplier(rawText) {
+  const text = normalizeDigits(rawText);
+  const m =
+    text.match(/入り数[:：]\s*(\d+)\s*[枚個]/) ||
+    text.match(/(\d+)\s*[枚個]入り/) ||
+    text.match(/(\d+)\s*枚セット/) ||
+    text.match(/(\d+)\s*個セット/);
+  return m ? Number(m[1]) : 1;
+}
+
 // 「ナポリ/クリスピー ○インチ」「玉生地 ○g」のような単純な商品名から、ピザ生地カテゴリの
 // 商品名(例: 6ナポリ、150玉)と、1個あたりの入り数(枚数/個数)を推測する。
-// 「入り数:5枚」「100個入り」「5枚セット」等、1回の注文(個数)で実際に何枚/何個
-// 出庫されるかを表す倍率。見つからなければ1(=個数がそのまま枚数/個数)とする。
 // 判断できなければnullを返す。
 function detectSimpleProductName(rawText) {
   const text = normalizeDigits(rawText);
+  const multiplier = detectMultiplier(rawText);
   if (text.includes('玉生地')) {
     // 「130 150 180 200g」のようなタイトル冒頭のサイズ一覧に引きずられないよう、
     // 「サイズ:150g」の明示指定があればそちらを優先する。
     let weightMatch = text.match(/サイズ[:：]\s*(\d+)\s*g/);
     if (!weightMatch) weightMatch = text.match(/(\d+)\s*g/);
     if (weightMatch) {
-      const countMatch =
-        text.match(/入り数[:：]\s*(\d+)\s*個/) || text.match(/\d+\s*g\D{0,6}?(\d+)\s*個/) || text.match(/(\d+)\s*個入り/);
-      const multiplier = countMatch ? Number(countMatch[1]) : 1;
       return { category: 'ピザ生地', name: `${weightMatch[1]}玉`, multiplier };
     }
   }
@@ -1089,9 +1100,6 @@ function detectSimpleProductName(rawText) {
   let sizeMatch = text.match(/サイズ[:：]\s*(\d+)\s*インチ/);
   if (!sizeMatch) sizeMatch = text.match(/(\d+)\s*インチ/);
   if (sizeMatch) {
-    const countMatch =
-      text.match(/入り数[:：]\s*(\d+)\s*枚/) || text.match(/(\d+)\s*枚入り/) || text.match(/(\d+)\s*枚セット/);
-    const multiplier = countMatch ? Number(countMatch[1]) : 1;
     if (text.includes('クリスピー')) return { category: 'ピザ生地', name: `${sizeMatch[1]}クリスピー`, multiplier };
     if (text.includes('ナポリ')) return { category: 'ピザ生地', name: `${sizeMatch[1]}ナポリ`, multiplier };
   }
@@ -1138,6 +1146,21 @@ function buildEcImportEntries(csvRows, products, fallbackDate) {
           const cacheKey = `${category || 'flavor'}::${f.text}`;
           entries.push({ date, qty: r.qty, label: f.text, productId: null, cacheKey });
         }
+      });
+    } else if (r.code) {
+      // 商品コード(助ネコのSKU)があれば、それを最優先の手がかりにする。商品名は
+      // セールごとに変わりやすいが、コードは基本的に変わらないため一度対応させれば
+      // 以降ずっと自動でマッチする。入り数の倍率だけはタイトルから引き続き推測する。
+      const multiplier = detectMultiplier(rawName);
+      entries.push({
+        date,
+        qty: r.qty * multiplier,
+        label:
+          multiplier > 1
+            ? `[${r.code}] ${rawName}(注文${r.qty}件 × 入り${multiplier} = ${r.qty * multiplier})`
+            : `[${r.code}] ${rawName}`,
+        productId: null,
+        cacheKey: `sku::${r.code}`,
       });
     } else {
       const simple = detectSimpleProductName(rawName);
