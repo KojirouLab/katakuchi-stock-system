@@ -73,6 +73,7 @@ create table if not exists ec_import_product_mappings (
   id uuid primary key default gen_random_uuid(),
   source_text text not null,
   product_id uuid references products(id), -- nullは「この商品名は無視する(取り込まない)」の意味
+  qty_per_unit numeric not null default 1, -- 注文1件あたりのこの商品の数量(例:「3枚セット」なら3)
   created_at timestamptz not null default now(),
   unique (source_text, product_id)
 );

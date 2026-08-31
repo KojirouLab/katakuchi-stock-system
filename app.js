@@ -1212,21 +1212,25 @@ function buildEcImportEntries(csvRows, products, fallbackDate) {
   return entries;
 }
 
-// 1つのcacheKeyに対応付けられた商品ID配列(productIds)から、entryを複製して返す。
-// セット商品など複数商品(1個ずつ)が対応付けられている場合は商品の数だけ複製する。
-// 空配列(在庫管理外)ならproductId:nullで1件返す。
-function expandEntryForProductIds(en, productIds) {
-  const ids = (productIds || []).filter((id) => id);
-  if (!ids.length) return [{ ...en, productId: null, resolved: true }];
-  return ids.map((pid, i) => ({
-    ...en,
-    productId: pid,
-    resolved: true,
-    label: ids.length > 1 ? `${en.label}(${i + 1}/${ids.length}種)` : en.label,
-  }));
+// 1つのcacheKeyに対応付けられた内訳(items: {productId, qty}の配列)から、entryを複製して返す。
+// セット商品など複数商品が対応付けられている場合は商品の数だけ複製し、qtyでその商品の
+// 数量倍率(例:「3枚セット」ならqty:3)をかける。空配列(在庫管理外)ならproductId:nullで1件返す。
+function expandEntryForMappingItems(en, items) {
+  const valid = (items || []).filter((it) => it && it.productId);
+  if (!valid.length) return [{ ...en, productId: null, resolved: true }];
+  return valid.map((it, i) => {
+    const mult = Number(it.qty) || 1;
+    return {
+      ...en,
+      productId: it.productId,
+      qty: en.qty * mult,
+      resolved: true,
+      label: valid.length > 1 || mult !== 1 ? `${en.label}(${i + 1}/${valid.length}種 × ${mult})` : en.label,
+    };
+  });
 }
 
-// 学習キャッシュ(cacheKey→商品ID配列)をentries配列に適用する。
+// 学習キャッシュ(cacheKey→内訳配列)をentries配列に適用する。
 function applyEcImportMappings(entries, mappingsByKey) {
   const result = [];
   entries.forEach((en) => {
@@ -1234,7 +1238,7 @@ function applyEcImportMappings(entries, mappingsByKey) {
       result.push(en);
       return;
     }
-    result.push(...expandEntryForProductIds(en, mappingsByKey.get(en.cacheKey)));
+    result.push(...expandEntryForMappingItems(en, mappingsByKey.get(en.cacheKey)));
   });
   return result;
 }
@@ -1277,7 +1281,7 @@ async function renderEcImportPage() {
       const mappingsByKey = new Map();
       mappings.forEach((m) => {
         const arr = mappingsByKey.get(m.source_text) || [];
-        arr.push(m.product_id);
+        arr.push({ productId: m.product_id, qty: m.qty_per_unit || 1 });
         mappingsByKey.set(m.source_text, arr);
       });
       const hasDate = csvRows.some((r) => r.date);
@@ -1367,7 +1371,7 @@ function renderEcImportReview(bodyEl, entries, products) {
   bodyEl.innerHTML = `
     <div class="card">
       <h2>対応が必要な商品名(${unresolvedKeys.length}件)${skippedCount ? `・在庫管理外に設定済み${skippedCount}件` : ''}</h2>
-      <p class="hint">助ネコの商品名に対応する在庫管理システムの商品を選んでください。セット商品などで1つの商品名が複数商品(1個ずつ)の詰め合わせになっている場合は、種類数を2以上にして内訳を指定できます。一度選ぶと、次回から自動で対応します。</p>
+      <p class="hint">助ネコの商品名に対応する在庫管理システムの商品を選んでください。セット商品などで1つの商品名が複数商品の詰め合わせになっている場合は種類数を2以上に、「3枚セット」のように同じ商品が複数個入っている場合は数量を書き換えてください。一度選ぶと、次回から自動で対応します。</p>
       ${unresolvedHtml}
     </div>
     <div class="card">
@@ -1402,9 +1406,15 @@ function renderEcImportReview(bodyEl, entries, products) {
         slotsEl.innerHTML = Array.from(
           { length: n },
           (_, i) => `
-          <div class="field" style="margin: 0 0 8px;">
-            <label>${n > 1 ? `${i + 1}種類目の商品` : '商品'}</label>
-            <select class="ec-import-slot-select">${productOptionsHtml(null)}</select>
+          <div class="field-row" style="margin: 0 0 8px;">
+            <div class="field" style="margin-bottom: 0;">
+              <label>${n > 1 ? `${i + 1}種類目の商品` : '商品'}</label>
+              <select class="ec-import-slot-select">${productOptionsHtml(null)}</select>
+            </div>
+            <div class="field" style="margin-bottom: 0; max-width: 100px;">
+              <label>数量(注文1件につき)</label>
+              <input type="text" inputmode="numeric" pattern="[0-9]*" class="qty-input ec-import-slot-qty" value="1" onfocus="this.select()">
+            </div>
           </div>`
         ).join('');
       }
@@ -1413,28 +1423,29 @@ function renderEcImportReview(bodyEl, entries, products) {
 
     confirmBtn.addEventListener('click', async () => {
       const n = Number(countSel.value);
-      let productIds;
+      let items;
       if (n === 0) {
-        productIds = [];
+        items = [];
       } else {
-        const values = [...slotsEl.querySelectorAll('.ec-import-slot-select')].map((s) => s.value);
-        if (values.some((v) => !v)) {
+        const selects = [...slotsEl.querySelectorAll('.ec-import-slot-select')];
+        const qtyInputs = [...slotsEl.querySelectorAll('.ec-import-slot-qty')];
+        if (selects.some((s) => !s.value)) {
           alert('すべての種類で商品を選択してください。');
           return;
         }
-        productIds = values;
+        items = selects.map((s, i) => ({ productId: s.value, qty: Number(qtyInputs[i].value) || 1 }));
       }
       confirmBtn.disabled = true;
       countSel.disabled = true;
       try {
-        await saveEcImportMappings(key, productIds);
+        await saveEcImportMappings(key, items);
         const newEntries = [];
         entries.forEach((en) => {
           if (en.cacheKey !== key) {
             newEntries.push(en);
             return;
           }
-          newEntries.push(...expandEntryForProductIds(en, productIds));
+          newEntries.push(...expandEntryForMappingItems(en, items));
         });
         renderEcImportReview(bodyEl, newEntries, products);
       } catch (e) {

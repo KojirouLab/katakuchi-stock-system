@@ -122,6 +122,14 @@ alter table ec_import_product_mappings drop constraint if exists ec_import_produ
 alter table ec_import_product_mappings add constraint ec_import_product_mappings_source_text_product_id_key unique (source_text, product_id);
 ```
 
+**2026-08-31(2): 助ネコCSV取込で、対応付けた商品ごとに数量(倍率)も指定できるように変更**
+
+「アラビアータピザ3枚セット」のように、1つの商品名が同じ商品を複数個含む(または複数商品それぞれ異なる個数を含む)場合に対応するため、`qty_per_unit`列を追加します。
+
+```sql
+alter table ec_import_product_mappings add column if not exists qty_per_unit numeric not null default 1;
+```
+
 ## 困ったときは
 
 - 保存や読み込みに失敗する: 画面のエラーメッセージを確認し、通信状況を確認して再度お試しください。

@@ -262,17 +262,19 @@ async function fetchAllEcImportMappings() {
   return data || [];
 }
 
-// sourceTextの対応を保存する。productIdsが空配列なら「在庫管理外(取り込まない)」の意味で
-// product_id=nullの1件を保存する。2件以上渡すと、セット商品などで1つの商品名が複数商品
-// (1個ずつ)の詰め合わせであることを表し、同じsource_textで複数行保存する。
+// sourceTextの対応を保存する。itemsは{productId, qty}の配列。
+// 空配列なら「在庫管理外(取り込まない)」の意味でproduct_id=nullの1件を保存する。
+// 2件以上渡すと、セット商品などで1つの商品名が複数商品の詰め合わせであることを表し、
+// 同じsource_textで複数行保存する。qtyは「注文1件あたりのこの商品の数量」
+// (例:「アラビアータピザ3枚セット」ならqty:3)。
 // 選び直しに対応するため、保存前に同じsource_textの既存行を全て削除してから入れ直す。
-async function saveEcImportMappings(sourceText, productIds) {
+async function saveEcImportMappings(sourceText, items) {
   assertClient();
   const { error: delError } = await sb.from('ec_import_product_mappings').delete().eq('source_text', sourceText);
   if (delError) throw delError;
-  const rows = productIds.length
-    ? productIds.map((productId) => ({ source_text: sourceText, product_id: productId }))
-    : [{ source_text: sourceText, product_id: null }];
+  const rows = items.length
+    ? items.map((it) => ({ source_text: sourceText, product_id: it.productId, qty_per_unit: it.qty || 1 }))
+    : [{ source_text: sourceText, product_id: null, qty_per_unit: 1 }];
   const { error } = await sb.from('ec_import_product_mappings').insert(rows);
   if (error) throw error;
 }
