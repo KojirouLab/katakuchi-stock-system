@@ -1092,7 +1092,10 @@ function detectMultiplierInfo(rawText) {
     text.match(/入り数[:：]\s*(\d+)\s*[枚個]/) ||
     text.match(/(\d+)\s*[枚個]入り/) ||
     text.match(/(\d+)\s*枚セット/) ||
-    text.match(/(\d+)\s*個セット/);
+    text.match(/(\d+)\s*個セット/) ||
+    // 「玉生地 150g 10個」「玉生地 200g×60個」のように、重さの直後に区切り記号や空白を
+    // 挟んで個数だけが続く(「入り」「セット」等の言葉が無い)業務用タイトル向け。
+    text.match(/\d+\s*g\s*[×xX]?\s*(\d+)\s*個/);
   return { value: m ? Number(m[1]) : 1, confident: !!m };
 }
 
@@ -1105,6 +1108,16 @@ function detectMultiplierInfo(rawText) {
 function detectSimpleProductName(rawText) {
   const text = normalizeDigits(rawText);
   const { value: multiplier, confident: confidentMultiplier } = detectMultiplierInfo(rawText);
+  // 「サイズ入り数:8インチ100枚」のように、「サイズ:」「入り数:」がラベルとして分かれずに
+  // 連結された表記が稀にある。通常のサイズ/入り数の正規表現ではどちらも検出できず、
+  // (デフォルトの倍率1のまま)誤って少ない数量で確定してしまう恐れがあるため、先に検出する。
+  const fusedMatch = text.match(/サイズ入り数[:：]\s*(\d+)\s*インチ\s*(\d+)\s*枚/);
+  if (fusedMatch) {
+    const fusedSize = fusedMatch[1];
+    const fusedMultiplier = Number(fusedMatch[2]);
+    if (text.includes('クリスピー')) return { category: 'ピザ生地', name: `${fusedSize}クリスピー`, multiplier: fusedMultiplier, confidentMultiplier: true };
+    if (text.includes('ナポリ')) return { category: 'ピザ生地', name: `${fusedSize}ナポリ`, multiplier: fusedMultiplier, confidentMultiplier: true };
+  }
   if (text.includes('玉生地')) {
     // 「130 150 180 200g」のようなタイトル冒頭のサイズ一覧に引きずられないよう、
     // 「サイズ:150g」の明示指定があればそちらを優先する。
