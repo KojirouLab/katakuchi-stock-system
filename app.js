@@ -1081,6 +1081,15 @@ function detectFixedVarietySet(rawText) {
   return null;
 }
 
+// 「5枚+シュレッドチーズ300gセット」のように、ピザ生地とシュレッドチーズ1袋がセットに
+// なっている商品タイトルを検出する。ピザの枚数だけを倍率として返す(チーズは1袋固定)。
+function detectPizzaPlusCheeseBundle(rawText) {
+  const text = normalizeDigits(rawText);
+  const m = text.match(/(\d+)\s*枚\s*\+\s*シュレッドチーズ\s*(\d+)\s*g\s*セット/);
+  if (!m) return null;
+  return { pizzaMultiplier: Number(m[1]), cheeseWeight: Number(m[2]) };
+}
+
 // 「入り数:5枚」「100個入り」「5枚セット」「50個セット」等、1回の注文(個数)で実際に
 // 何枚/何個出庫されるかを表す倍率をタイトルから探す。見つからなければ1を返す。
 // 入り数(倍率)と、それが「入り数:」等の明示表記から確実に読み取れたか(confident)を返す。
@@ -1201,6 +1210,29 @@ function buildEcImportEntries(csvRows, products, fallbackDate) {
             cacheKey,
           });
         }
+      } else if (detectPizzaPlusCheeseBundle(rawName)) {
+        // ピザ生地とシュレッドチーズ1袋のセット商品。ピザ側とチーズ側、2つの商品として
+        // それぞれ計上する(片方が見つからなくても、もう片方は解決できるように独立させる)。
+        const cheeseBundle = detectPizzaPlusCheeseBundle(rawName);
+        const simple = detectSimpleProductName(rawName);
+        const pizzaProduct = simple ? resolveProductByCategoryName(products, simple.category, simple.name) : null;
+        const cheeseProduct = products.find(
+          (p) => p.category === 'チーズ' && normalizeForMatch(p.name) === normalizeForMatch('シュレッド')
+        );
+        entries.push({
+          date,
+          qty: r.qty * cheeseBundle.pizzaMultiplier,
+          label: `${rawName}(ピザ${cheeseBundle.pizzaMultiplier}枚分)`,
+          productId: pizzaProduct ? pizzaProduct.id : null,
+          cacheKey: pizzaProduct ? null : `simple::${simple ? simple.category : 'ピザ生地'}::${simple ? simple.name : rawName}`,
+        });
+        entries.push({
+          date,
+          qty: r.qty,
+          label: `${rawName}(シュレッドチーズ${cheeseBundle.cheeseWeight}g)`,
+          productId: cheeseProduct ? cheeseProduct.id : null,
+          cacheKey: cheeseProduct ? null : 'cheese::シュレッド',
+        });
       } else {
         // 助ネコの商品コードは複数サイズ/複数商品で使い回されていることがあり、
         // コード名を信用できないと判断されたため、商品コードはマッチングには使わず、
