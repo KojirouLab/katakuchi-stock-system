@@ -1090,6 +1090,16 @@ function detectPizzaPlusCheeseBundle(rawText) {
   return { pizzaMultiplier: Number(m[1]), cheeseWeight: Number(m[2]) };
 }
 
+// 「モッツァレラチーズ/1kg ブラッツアーレ（4kg）」のように、1kgあたり1個の商品が
+// タイトル末尾の「(Nkg)」でまとめて何個分注文されたかを検出する(1kg=1個のため倍率=N)。
+function detectCheeseKgBundle(rawText) {
+  const text = normalizeDigits(rawText);
+  if (!/ブラッツ/.test(text)) return null;
+  const m = text.match(/[（(]\s*(\d+)\s*kg\s*[）)]/);
+  if (!m) return null;
+  return { category: 'チーズ', name: 'ブラッツァーレ', multiplier: Number(m[1]) };
+}
+
 // 「入り数:5枚」「100個入り」「5枚セット」「50個セット」等、1回の注文(個数)で実際に
 // 何枚/何個出庫されるかを表す倍率をタイトルから探す。見つからなければ1を返す。
 // 入り数(倍率)と、それが「入り数:」等の明示表記から確実に読み取れたか(confident)を返す。
@@ -1232,6 +1242,16 @@ function buildEcImportEntries(csvRows, products, fallbackDate) {
           label: `${rawName}(シュレッドチーズ${cheeseBundle.cheeseWeight}g)`,
           productId: cheeseProduct ? cheeseProduct.id : null,
           cacheKey: cheeseProduct ? null : 'cheese::シュレッド',
+        });
+      } else if (detectCheeseKgBundle(rawName)) {
+        const cheeseKg = detectCheeseKgBundle(rawName);
+        const product = resolveProductByCategoryName(products, cheeseKg.category, cheeseKg.name);
+        entries.push({
+          date,
+          qty: r.qty * cheeseKg.multiplier,
+          label: `${rawName}(注文${r.qty}件 × ${cheeseKg.multiplier}kg = ${r.qty * cheeseKg.multiplier}個)`,
+          productId: product ? product.id : null,
+          cacheKey: product ? null : `simple::${cheeseKg.category}::${cheeseKg.name}`,
         });
       } else {
         // 助ネコの商品コードは複数サイズ/複数商品で使い回されていることがあり、
