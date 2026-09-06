@@ -1100,6 +1100,20 @@ function detectCheeseKgBundle(rawText) {
   return { category: 'チーズ', name: 'ブラッツァーレ', multiplier: Number(m[1]) };
 }
 
+// 「生地:マルゲリータ・ナポリタイプ、サイズ:10インチ、数量:5枚セット」のように、
+// フレーバー(マルゲリータ)・生地タイプ・サイズが「生地:」ラベルで明示されている
+// 選べるセット商品を検出する。タイトル前半に「クリスピータイプ選べる」等の選択肢一覧が
+// あっても、「生地:」欄の実際の指定を優先する(でないと最初に出てくるキーワードに
+// 引きずられて別の生地タイプに誤判定してしまう)。
+function detectMargheritaSelectableBundle(rawText) {
+  const text = normalizeDigits(rawText);
+  const m = text.match(/生地[:：]\s*マルゲリータ[・･]?(ナポリ|クリスピー)タイプ.*?サイズ[:：]\s*(\d+)\s*インチ/);
+  if (!m) return null;
+  const category = m[1] === 'クリスピー' ? '新みちのくクリスピー' : '新みちのくナポリ';
+  const { value: multiplier } = detectMultiplierInfo(rawText);
+  return { category, name: `マルゲ${m[2]}インチ`, multiplier };
+}
+
 // 「入り数:5枚」「100個入り」「5枚セット」「50個セット」等、1回の注文(個数)で実際に
 // 何枚/何個出庫されるかを表す倍率をタイトルから探す。見つからなければ1を返す。
 // 入り数(倍率)と、それが「入り数:」等の明示表記から確実に読み取れたか(confident)を返す。
@@ -1255,6 +1269,17 @@ function buildEcImportEntries(csvRows, products, fallbackDate) {
           label: `${rawName}(注文${r.qty}件 × ${cheeseKg.multiplier}kg = ${r.qty * cheeseKg.multiplier}個)`,
           productId: product ? product.id : null,
           cacheKey: product ? null : `simple::${cheeseKg.category}::${cheeseKg.name}`,
+        });
+      } else if (detectMargheritaSelectableBundle(rawName)) {
+        const mb = detectMargheritaSelectableBundle(rawName);
+        const product = resolveProductByCategoryName(products, mb.category, mb.name);
+        const multiplier = mb.multiplier || 1;
+        entries.push({
+          date,
+          qty: r.qty * multiplier,
+          label: multiplier > 1 ? `${rawName}(注文${r.qty}件 × 入り${multiplier} = ${r.qty * multiplier})` : rawName,
+          productId: product ? product.id : null,
+          cacheKey: product ? null : `simple::${mb.category}::${mb.name}`,
         });
       } else {
         // 助ネコの商品コードは複数サイズ/複数商品で使い回されていることがあり、
