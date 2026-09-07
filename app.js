@@ -974,8 +974,11 @@ function toggleDestinationEditForm(id, destinations) {
 
 // ---- 助ネコCSV取込 ----
 
+// 全角の数字だけでなく、全角の英字・記号(「１３０ｇ」の「ｇ」等)も半角に変換する。
+// 数字だけを見ていた頃は「１３０ｇ」のような全角アルファベット混じりの表記で
+// 「130g」を検出するパターンが一致せず、誤判定の原因になっていた。
 function normalizeDigits(str) {
-  return String(str ?? '').replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xff10 + 0x30));
+  return String(str ?? '').replace(/[！-～]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
 }
 
 // 簡易CSVパーサ("..."で囲まれたフィールド、""でのエスケープ、フィールド内改行に対応)
