@@ -1,5 +1,5 @@
 // 商品カテゴリ(固定リスト)。カテゴリを増やしたい場合はここに追記する。
-const CATEGORIES = ['ピザ生地', 'チーズ', 'ソース', '新みちのくクリスピー', '新みちのくナポリ', '爆盛チーズピザ', 'ろっこ', '牡蠣', 'その他'];
+const CATEGORIES = ['ピザ生地', 'チーズ', 'ソース', '新みちのくクリスピー', '新みちのくナポリ', '爆盛チーズピザ', 'ろっこ', '牡蠣', 'ムール貝', 'その他'];
 
 // EC出荷はYahoo!/Amazon/楽天/Shopifyなどモールを問わず合計数量だけを管理する
 // (ec_shipments.mallは常にこの値を使う。将来モール別に分けたくなった場合のために列だけ残してある)。
@@ -1142,6 +1142,23 @@ function detectOysterBundle(rawText) {
   };
 }
 
+// 「活ムール貝 3kg 女川産」「活ムール貝 三陸産 冷蔵（入り数:2kg）」のように、サイズ違いは
+// 無くkg数だけが商品ごとに異なる。「入り数:Nkg」の明示があればそちらを優先し、無ければ
+// タイトル中の「Nkg」をそのまま読む。
+function detectMusselBundle(rawText) {
+  if (!/ムール貝/.test(rawText)) return null;
+  const text = normalizeDigits(rawText);
+  const m = text.match(/入り数[:：]\s*(\d+(?:\.\d+)?)\s*kg/i) || text.match(/(\d+(?:\.\d+)?)\s*kg/i);
+  return { category: 'ムール貝', name: 'ムール貝', kg: m ? Number(m[1]) : 1 };
+}
+
+// 「MCC パスタソース 5種類 詰め合わせ...」は個々のソースの内訳を分けず、
+// 詰め合わせ1箱をそのまま「その他」カテゴリの1商品として数える。
+function detectMccPastaSauce(rawText) {
+  if (!/MCC/.test(rawText) || !/パスタソース/.test(rawText)) return null;
+  return { category: 'その他', name: 'パスタソース' };
+}
+
 // 「生地:マルゲリータ・ナポリタイプ、サイズ:10インチ、数量:5枚セット」のように、
 // フレーバー(マルゲリータ)・生地タイプ・サイズが「生地:」ラベルで明示されている
 // 選べるセット商品を検出する。タイトル前半に「クリスピータイプ選べる」等の選択肢一覧が
@@ -1375,6 +1392,26 @@ function buildEcImportEntries(csvRows, products, fallbackDate) {
             cacheKey: gloveProduct ? null : 'simple::牡蠣::軍手ナイフセット',
           });
         }
+      } else if (detectMusselBundle(rawName)) {
+        const mussel = detectMusselBundle(rawName);
+        const product = resolveProductByCategoryName(products, mussel.category, mussel.name);
+        entries.push({
+          date,
+          qty: r.qty * mussel.kg,
+          label: `${rawName}(${mussel.kg}kg × 注文${r.qty}件 = ${r.qty * mussel.kg}kg)`,
+          productId: product ? product.id : null,
+          cacheKey: product ? null : `simple::${mussel.category}::${mussel.name}`,
+        });
+      } else if (detectMccPastaSauce(rawName)) {
+        const ps = detectMccPastaSauce(rawName);
+        const product = resolveProductByCategoryName(products, ps.category, ps.name);
+        entries.push({
+          date,
+          qty: r.qty,
+          label: rawName,
+          productId: product ? product.id : null,
+          cacheKey: product ? null : `simple::${ps.category}::${ps.name}`,
+        });
       } else {
         // 助ネコの商品コードは複数サイズ/複数商品で使い回されていることがあり、
         // コード名を信用できないと判断されたため、商品コードはマッチングには使わず、
