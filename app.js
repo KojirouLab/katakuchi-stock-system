@@ -1100,6 +1100,14 @@ function detectCheeseKgBundle(rawText) {
   return { category: 'チーズ', name: 'ブラッツァーレ', multiplier: Number(m[1]) };
 }
 
+// 「シュレッドチーズ 300g シュレッドタイプ...」のような1袋のシュレッドチーズ商品は、
+// 「/」区切りや末尾の「（300g×1袋）」の有無など表記にばらつきがあるため、
+// 完全一致のキャッシュに頼らずキーワードで検出する。
+function detectShreddedCheese(rawText) {
+  if (!/シュレッド/.test(rawText) || !/チーズ/.test(rawText)) return null;
+  return { category: 'チーズ', name: 'シュレッド' };
+}
+
 // 「生地:マルゲリータ・ナポリタイプ、サイズ:10インチ、数量:5枚セット」のように、
 // フレーバー(マルゲリータ)・生地タイプ・サイズが「生地:」ラベルで明示されている
 // 選べるセット商品を検出する。タイトル前半に「クリスピータイプ選べる」等の選択肢一覧が
@@ -1287,6 +1295,16 @@ function buildEcImportEntries(csvRows, products, fallbackDate) {
           label: multiplier > 1 ? `${rawName}(注文${r.qty}件 × 入り${multiplier} = ${r.qty * multiplier})` : rawName,
           productId: product ? product.id : null,
           cacheKey: product ? null : `simple::${mb.category}::${mb.name}`,
+        });
+      } else if (detectShreddedCheese(rawName)) {
+        const sc = detectShreddedCheese(rawName);
+        const product = resolveProductByCategoryName(products, sc.category, sc.name);
+        entries.push({
+          date,
+          qty: r.qty,
+          label: rawName,
+          productId: product ? product.id : null,
+          cacheKey: product ? null : `simple::${sc.category}::${sc.name}`,
         });
       } else {
         // 助ネコの商品コードは複数サイズ/複数商品で使い回されていることがあり、
