@@ -1090,14 +1090,17 @@ function detectPizzaPlusCheeseBundle(rawText) {
   return { pizzaMultiplier: Number(m[1]), cheeseWeight: Number(m[2]) };
 }
 
-// 「モッツァレラチーズ/1kg ブラッツアーレ（4kg）」のように、1kgあたり1個の商品が
-// タイトル末尾の「(Nkg)」でまとめて何個分注文されたかを検出する(1kg=1個のため倍率=N)。
+// 「モッツァレラチーズ/1kg ブラッツアーレ（4kg）」「モッツァレラ BRAZZALE 冷凍
+// ブロック 1kg...（個数/kg数:1kg）」のように、1kgあたり1個の商品を検出する。
+// カタカナ「ブラッツ」でも英語表記「BRAZZALE」でも検出し、末尾の「(Nkg)」や
+// 「個数/kg数:Nkg」があればNを倍率とし、無ければ1個として扱う。
 function detectCheeseKgBundle(rawText) {
   const text = normalizeDigits(rawText);
-  if (!/ブラッツ/.test(text)) return null;
-  const m = text.match(/[（(]\s*(\d+)\s*kg\s*[）)]/);
-  if (!m) return null;
-  return { category: 'チーズ', name: 'ブラッツァーレ', multiplier: Number(m[1]) };
+  if (!/ブラッツ/.test(text) && !/BRAZZALE/i.test(text)) return null;
+  const m =
+    text.match(/[（(]\s*(\d+)\s*kg\s*[）)]/) ||
+    text.match(/個数\/?kg数[:：]\s*(\d+)\s*kg/i);
+  return { category: 'チーズ', name: 'ブラッツァーレ', multiplier: m ? Number(m[1]) : 1 };
 }
 
 // 「シュレッドチーズ 300g シュレッドタイプ...」のような1袋のシュレッドチーズ商品は、
