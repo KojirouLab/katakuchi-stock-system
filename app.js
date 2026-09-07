@@ -1163,6 +1163,13 @@ function detectSimpleProductName(rawText) {
       return { category: 'ピザ生地', name: `${weightMatch[1]}玉`, multiplier, confidentMultiplier };
     }
   }
+  // 「サイズ:厚め8インチ 130g」「クリスピータイプ クラスト 130g 8インチ」のように、
+  // 通常の8インチクリスピーとは別に、厚み違いの130g品が独立した商品(130クリスピー)
+  // としてマスタ登録されている。表記順(「厚め8インチ 130g」「130g 8インチ」等)に
+  // 関わらず、タイトル中に130gの明示があればインチ数より優先する。
+  if (text.includes('クリスピー') && /(?:^|[^0-9])130\s*g(?:[^0-9]|$)/.test(text)) {
+    return { category: 'ピザ生地', name: '130クリスピー', multiplier, confidentMultiplier };
+  }
   // 「6 8 10 12インチ」のようなタイトル冒頭のサイズ一覧に引きずられないよう、
   // 「サイズ:10インチ」の明示指定があればそちらを優先する。
   let sizeMatch = text.match(/サイズ[:：]\s*(\d+)\s*インチ/);
