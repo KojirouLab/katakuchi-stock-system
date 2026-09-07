@@ -1108,6 +1108,17 @@ function detectShreddedCheese(rawText) {
   return { category: 'チーズ', name: 'シュレッド' };
 }
 
+// 「ドライイースト サフ 500g 赤（個数:10個）」のように、個数がタイトル内の
+// 「個数:」ラベルで明示されているイースト商品を検出する(色違いは現状「赤」のみ登録)。
+function detectDryYeast(rawText) {
+  const text = normalizeDigits(rawText);
+  if (!/イースト/.test(text)) return null;
+  const m = text.match(/個数[:：]\s*(\d+)\s*個/);
+  const multiplier = m ? Number(m[1]) : 1;
+  const name = text.includes('赤') ? '赤サフ（イースト）' : null;
+  return { category: 'その他', name, multiplier };
+}
+
 // 「生地:マルゲリータ・ナポリタイプ、サイズ:10インチ、数量:5枚セット」のように、
 // フレーバー(マルゲリータ)・生地タイプ・サイズが「生地:」ラベルで明示されている
 // 選べるセット商品を検出する。タイトル前半に「クリスピータイプ選べる」等の選択肢一覧が
@@ -1308,6 +1319,17 @@ function buildEcImportEntries(csvRows, products, fallbackDate) {
           label: rawName,
           productId: product ? product.id : null,
           cacheKey: product ? null : `simple::${sc.category}::${sc.name}`,
+        });
+      } else if (detectDryYeast(rawName)) {
+        const dy = detectDryYeast(rawName);
+        const product = dy.name ? resolveProductByCategoryName(products, dy.category, dy.name) : null;
+        const multiplier = dy.multiplier || 1;
+        entries.push({
+          date,
+          qty: r.qty * multiplier,
+          label: multiplier > 1 ? `${rawName}(注文${r.qty}件 × 入り${multiplier} = ${r.qty * multiplier})` : rawName,
+          productId: product ? product.id : null,
+          cacheKey: product ? null : `simple::${dy.category}::イースト`,
         });
       } else {
         // 助ネコの商品コードは複数サイズ/複数商品で使い回されていることがあり、
