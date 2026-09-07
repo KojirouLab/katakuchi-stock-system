@@ -1,5 +1,5 @@
 // 商品カテゴリ(固定リスト)。カテゴリを増やしたい場合はここに追記する。
-const CATEGORIES = ['ピザ生地', 'チーズ', 'ソース', '新みちのくクリスピー', '新みちのくナポリ', '爆盛チーズピザ', 'ろっこ', 'その他'];
+const CATEGORIES = ['ピザ生地', 'チーズ', 'ソース', '新みちのくクリスピー', '新みちのくナポリ', '爆盛チーズピザ', 'ろっこ', '牡蠣', 'その他'];
 
 // EC出荷はYahoo!/Amazon/楽天/Shopifyなどモールを問わず合計数量だけを管理する
 // (ec_shipments.mallは常にこの値を使う。将来モール別に分けたくなった場合のために列だけ残してある)。
@@ -1125,6 +1125,23 @@ function detectDryYeast(rawText) {
   return { category: 'その他', name, multiplier };
 }
 
+// 「殻付き牡蠣...(サイズ:M、入り数:2kg、軍手ナイフセット:不要)」のように、牡蠣は
+// サイズ(S/M)・入り数(kg)・軍手ナイフセットの要否がタイトル末尾のラベルで明示されている。
+// 牡蠣本体はサイズ別に何kgかを、軍手ナイフセットは「要」の注文だけ別商品として数える。
+function detectOysterBundle(rawText) {
+  if (!/牡蠣|オイスター/.test(rawText)) return null;
+  const text = normalizeDigits(rawText);
+  const sizeMatch = text.match(/サイズ[:：]\s*([SM])/i);
+  if (!sizeMatch) return null;
+  const kgMatch = text.match(/入り数[:：]\s*(\d+(?:\.\d+)?)\s*kg/i);
+  const glovesMatch = text.match(/軍手ナイフセット[:：]\s*(要|不要)/);
+  return {
+    size: sizeMatch[1].toUpperCase(),
+    kg: kgMatch ? Number(kgMatch[1]) : 1,
+    gloves: glovesMatch ? glovesMatch[1] === '要' : false,
+  };
+}
+
 // 「生地:マルゲリータ・ナポリタイプ、サイズ:10インチ、数量:5枚セット」のように、
 // フレーバー(マルゲリータ)・生地タイプ・サイズが「生地:」ラベルで明示されている
 // 選べるセット商品を検出する。タイトル前半に「クリスピータイプ選べる」等の選択肢一覧が
@@ -1337,6 +1354,27 @@ function buildEcImportEntries(csvRows, products, fallbackDate) {
           productId: product ? product.id : null,
           cacheKey: product ? null : `simple::${dy.category}::イースト`,
         });
+      } else if (detectOysterBundle(rawName)) {
+        // 牡蠣本体(サイズ別kg)と、軍手ナイフセット(「要」の注文のみ)を別商品として計上する。
+        const oyster = detectOysterBundle(rawName);
+        const product = resolveProductByCategoryName(products, '牡蠣', oyster.size);
+        entries.push({
+          date,
+          qty: r.qty * oyster.kg,
+          label: `${rawName}(${oyster.size}サイズ ${oyster.kg}kg × 注文${r.qty}件 = ${r.qty * oyster.kg}kg)`,
+          productId: product ? product.id : null,
+          cacheKey: product ? null : `simple::牡蠣::${oyster.size}`,
+        });
+        if (oyster.gloves) {
+          const gloveProduct = resolveProductByCategoryName(products, '牡蠣', '軍手ナイフセット');
+          entries.push({
+            date,
+            qty: r.qty,
+            label: `${rawName}(軍手ナイフセット)`,
+            productId: gloveProduct ? gloveProduct.id : null,
+            cacheKey: gloveProduct ? null : 'simple::牡蠣::軍手ナイフセット',
+          });
+        }
       } else {
         // 助ネコの商品コードは複数サイズ/複数商品で使い回されていることがあり、
         // コード名を信用できないと判断されたため、商品コードはマッチングには使わず、
