@@ -1159,6 +1159,41 @@ function detectMccPastaSauce(rawText) {
   return { category: 'その他', name: 'パスタソース' };
 }
 
+// 「みちのくバジルソースとシーフードのピザ（ナポリタイプ）」「みちのくピザ マルゲリータ
+// （ナポリタイプ）」のように、フレーバー番号の指定なしに単品(1枚)で販売されている
+// みちのくピザのタイトルを検出する。サイズの明示が無ければ8インチが標準(本人確認済み。
+// マルゲリータのみサイズ違いの商品が複数あるので、サイズ表記(6/8/10インチ)があれば
+// そちらを優先する)。
+const MICHINOKU_FLAVOR_KEYWORDS = [
+  ['マルゲリータ', 'マルゲ'],
+  ['四種チーズ', '2四種チーズ'],
+  ['アラビアータ', '3アラビアータ'],
+  ['アンチョビ', '4アンチョビ'],
+  ['コーン', '5コーンチキン'],
+  ['シラス', '6シラス'],
+  ['シーフード', '7魚介'],
+  ['スモークチーズ', '8スモークチーズ'],
+  ['たらこ', '9タラコ'],
+  ['照り', '10照り焼き'],
+];
+function detectMichinokuSingleFlavor(rawText) {
+  if (!/みちのく/.test(rawText) || !/ピザ/.test(rawText)) return null;
+  const text = normalizeDigits(rawText);
+  const typeMatch = text.match(/[（(](ナポリ|クリスピー)タイプ[）)]/);
+  if (!typeMatch) return null;
+  const category = typeMatch[1] === 'クリスピー' ? '新みちのくクリスピー' : '新みちのくナポリ';
+  for (const [keyword, shortName] of MICHINOKU_FLAVOR_KEYWORDS) {
+    if (!text.includes(keyword)) continue;
+    if (shortName === 'マルゲ') {
+      const sizeMatch = text.match(/(\d+)\s*インチ/);
+      const size = sizeMatch ? sizeMatch[1] : '8';
+      return { category, name: `マルゲ${size}インチ` };
+    }
+    return { category, name: shortName };
+  }
+  return null;
+}
+
 // 「生地:マルゲリータ・ナポリタイプ、サイズ:10インチ、数量:5枚セット」のように、
 // フレーバー(マルゲリータ)・生地タイプ・サイズが「生地:」ラベルで明示されている
 // 選べるセット商品を検出する。タイトル前半に「クリスピータイプ選べる」等の選択肢一覧が
@@ -1411,6 +1446,16 @@ function buildEcImportEntries(csvRows, products, fallbackDate) {
           label: rawName,
           productId: product ? product.id : null,
           cacheKey: product ? null : `simple::${ps.category}::${ps.name}`,
+        });
+      } else if (detectMichinokuSingleFlavor(rawName)) {
+        const mf = detectMichinokuSingleFlavor(rawName);
+        const product = resolveProductByCategoryName(products, mf.category, mf.name);
+        entries.push({
+          date,
+          qty: r.qty,
+          label: rawName,
+          productId: product ? product.id : null,
+          cacheKey: product ? null : `simple::${mf.category}::${mf.name}`,
         });
       } else {
         // 助ネコの商品コードは複数サイズ/複数商品で使い回されていることがあり、
