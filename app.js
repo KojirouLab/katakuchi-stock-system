@@ -1503,7 +1503,7 @@ function expandEntryForMappingItems(en, items) {
 function applyEcImportMappings(entries, mappingsByKey) {
   const result = [];
   entries.forEach((en) => {
-    if (en.productId || !en.cacheKey || !mappingsByKey.has(en.cacheKey)) {
+    if (en.productId || en.cacheKey == null || !mappingsByKey.has(en.cacheKey)) {
       result.push(en);
       return;
     }
@@ -1571,7 +1571,7 @@ async function renderEcImportPage() {
 function renderEcImportReview(bodyEl, entries, products) {
   // 無視する(product_idがnullで解決済み)のものは除外
   const activeEntries = entries.filter((en) => !(en.resolved && !en.productId));
-  const unresolvedKeys = [...new Set(activeEntries.filter((en) => !en.productId && en.cacheKey).map((en) => en.cacheKey))];
+  const unresolvedKeys = [...new Set(activeEntries.filter((en) => !en.productId && en.cacheKey != null).map((en) => en.cacheKey))];
   const skippedCount = entries.length - activeEntries.length;
 
   const productOptionsHtml = (selectedId) =>
