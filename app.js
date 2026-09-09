@@ -1130,18 +1130,21 @@ function detectDryYeast(rawText) {
 // 牡蠣本体はサイズ別に何kgかを、軍手ナイフセットは必要な注文だけ別商品として数える。
 // 「軍手ナイフセット:要/必要」「軍手ナイフセット:不要」の他に、「オプション:軍手ナイフセット」
 // のように選択肢名だけが書かれている(=選択されている)表記もあるため両方に対応する。
+// 「殻付き生牡蠣...冷凍1kg 宮城県産」のようにサイズの明示が無い商品は、S/Mと区別せず
+// 「無選別」というサイズ区分1個で管理する(本人確認済み、2026-09-09)。
 function detectOysterBundle(rawText) {
   if (!/牡蠣|オイスター/.test(rawText)) return null;
   const text = normalizeDigits(rawText);
   const sizeMatch = text.match(/サイズ[:：]\s*([SM])/i);
-  if (!sizeMatch) return null;
-  const kgMatch = text.match(/入り数[:：]\s*(\d+(?:\.\d+)?)\s*kg/i);
+  const kgMatch =
+    text.match(/入り数[:：]\s*(\d+(?:\.\d+)?)\s*kg/i) || text.match(/(\d+(?:\.\d+)?)\s*kg/i);
+  if (!sizeMatch && !kgMatch) return null;
   const glovesLabelMatch = text.match(/軍手ナイフセット[:：]\s*(要|不要|必要)/);
   const gloves = glovesLabelMatch
     ? glovesLabelMatch[1] !== '不要'
     : /オプション[:：]\s*軍手ナイフセット/.test(text);
   return {
-    size: sizeMatch[1].toUpperCase(),
+    size: sizeMatch ? sizeMatch[1].toUpperCase() : '無選別',
     kg: kgMatch ? Number(kgMatch[1]) : 1,
     gloves,
   };
