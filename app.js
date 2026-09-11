@@ -1167,6 +1167,20 @@ function detectMccPastaSauce(rawText) {
   return { category: 'その他', name: 'パスタソース' };
 }
 
+// 「【業務用 テゾーロ ゴルゴンゾーラ チーズ クラッシュタイプ 1kg」は、既存の
+// 「ゴルゴンゾーラ(発注は5袋)」と同じ商品として扱う(本人確認済み、2026-09-11)。
+function detectTezoroGorgonzola(rawText) {
+  if (!/テゾーロ/.test(rawText) || !/ゴルゴンゾーラ/.test(rawText)) return null;
+  return { category: 'チーズ', name: 'ゴルゴンゾーラ(発注は5袋)' };
+}
+
+// 「訳あり/規格外品/業務用ピザ生地詰め合わせセット...」は、既存の「訳あり」と
+// 同じ商品として扱う(本人確認済み、2026-09-11)。
+function detectWakeariPizzaAssortment(rawText) {
+  if (!/訳あり/.test(rawText) || !/規格外/.test(rawText) || !/ピザ生地/.test(rawText)) return null;
+  return { category: 'ピザ生地', name: '訳あり' };
+}
+
 // 「みちのくバジルソースとシーフードのピザ（ナポリタイプ）」「みちのくピザ マルゲリータ
 // （ナポリタイプ）」のように、フレーバー番号の指定なしに単品(1枚)で販売されている
 // みちのくピザのタイトルを検出する。サイズの明示が無ければ8インチが標準(本人確認済み。
@@ -1465,6 +1479,26 @@ function buildEcImportEntries(csvRows, products, fallbackDate) {
           label: rawName,
           productId: product ? product.id : null,
           cacheKey: product ? null : `simple::${mf.category}::${mf.name}`,
+        });
+      } else if (detectTezoroGorgonzola(rawName)) {
+        const tg = detectTezoroGorgonzola(rawName);
+        const product = resolveProductByCategoryName(products, tg.category, tg.name);
+        entries.push({
+          date,
+          qty: r.qty,
+          label: rawName,
+          productId: product ? product.id : null,
+          cacheKey: product ? null : `simple::${tg.category}::${tg.name}`,
+        });
+      } else if (detectWakeariPizzaAssortment(rawName)) {
+        const wa = detectWakeariPizzaAssortment(rawName);
+        const product = resolveProductByCategoryName(products, wa.category, wa.name);
+        entries.push({
+          date,
+          qty: r.qty,
+          label: rawName,
+          productId: product ? product.id : null,
+          cacheKey: product ? null : `simple::${wa.category}::${wa.name}`,
         });
       } else {
         // 助ネコの商品コードは複数サイズ/複数商品で使い回されていることがあり、
