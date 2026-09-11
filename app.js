@@ -1032,19 +1032,35 @@ function csvRowsToObjects(rows) {
     name: findCol('商品名') >= 0 ? findCol('商品名') : findCol('商品'),
     code: findCol('コード'),
     qty: findCol('個数') >= 0 ? findCol('個数') : findCol('数量'),
-    date: findCol('発送') >= 0 ? findCol('発送') : findCol('日'),
+    // 「注文日」「処理済日」など「日」を含む列が複数あるため、まず「出荷予定日」を厳密に探し、
+    // 無ければ「発送」を含む列、最後に「日」を含む列(最初に見つかったもの)を使う。
+    // (以前は「発送」→「日」の順だけで探していたため、「出荷予定日」より先に「注文日」が
+    // 見つかってしまい、出荷予定日ではなく注文日を取り込んでしまうバグがあった)
+    date:
+      findCol('出荷予定日') >= 0
+        ? findCol('出荷予定日')
+        : findCol('発送') >= 0
+        ? findCol('発送')
+        : findCol('日'),
     orderNo: findCol('受注番号') >= 0 ? findCol('受注番号') : findCol('注文'),
+    recipientSei: findCol('お届け先名（姓）'),
+    recipientMei: findCol('お届け先名（名）'),
   };
   return rows
     .slice(1)
     .filter((r) => r.some((v) => v !== ''))
-    .map((r) => ({
-      name: idx.name >= 0 ? normalizeForMatch(r[idx.name] || '') : '',
-      code: idx.code >= 0 ? normalizeForMatch((r[idx.code] || '').trim()) : '',
-      qty: idx.qty >= 0 ? Number(r[idx.qty]) || 0 : 0,
-      date: idx.date >= 0 ? (r[idx.date] || '').trim().replace(/\//g, '-') : '',
-      orderNo: idx.orderNo >= 0 ? r[idx.orderNo] || '' : '',
-    }));
+    .map((r) => {
+      const sei = idx.recipientSei >= 0 ? r[idx.recipientSei] || '' : '';
+      const mei = idx.recipientMei >= 0 ? r[idx.recipientMei] || '' : '';
+      return {
+        name: idx.name >= 0 ? normalizeForMatch(r[idx.name] || '') : '',
+        code: idx.code >= 0 ? normalizeForMatch((r[idx.code] || '').trim()) : '',
+        qty: idx.qty >= 0 ? Number(r[idx.qty]) || 0 : 0,
+        date: idx.date >= 0 ? (r[idx.date] || '').trim().replace(/\//g, '-') : '',
+        orderNo: idx.orderNo >= 0 ? r[idx.orderNo] || '' : '',
+        recipient: `${sei}${mei ? ' ' + mei : ''}`.trim(),
+      };
+    });
 }
 
 // 「(1枚目:1.マルゲリータ、2枚目:2.４種のチーズ…)」のような福袋商品のタイトルから、
@@ -1555,6 +1571,30 @@ function applyEcImportMappings(entries, mappingsByKey) {
   return result;
 }
 
+// CSVの行(csvRows)を1行ずつbuildEcImportEntries+applyEcImportMappingsにかけ、
+// 「本日の出荷処理」画面用に、元の行(受注番号・お届け先・出荷予定日)と対応付けたまま
+// 商品への解決結果(entries)をまとめる。セット商品などで1行から複数商品に解決される
+// 場合も、1つの行グループとして扱う(出荷するかどうかは行単位で判断するため)。
+// 「在庫管理外」に解決された行や、個数が0以下(クーポン等)で何も解決されない行は含めない。
+function buildEcImportRowGroups(csvRows, products, mappingsByKey, fallbackDate) {
+  const groups = [];
+  csvRows.forEach((r) => {
+    let rowEntries = buildEcImportEntries([r], products, fallbackDate);
+    if (!rowEntries.length) return;
+    rowEntries = applyEcImportMappings(rowEntries, mappingsByKey);
+    const resolved = rowEntries.filter((en) => en.productId);
+    if (!resolved.length) return;
+    groups.push({
+      orderNo: r.orderNo,
+      rawName: r.name,
+      recipient: r.recipient || '',
+      date: r.date || fallbackDate || '',
+      entries: resolved,
+    });
+  });
+  return groups;
+}
+
 async function renderEcImportPage() {
   app.innerHTML = `
     <div class="page wide">
@@ -1589,7 +1629,11 @@ async function renderEcImportPage() {
         bodyEl.innerHTML = '<div class="card"><p class="msg-error">CSVの中身を読み取れませんでした。列の形式を確認してください。</p></div>';
         return;
       }
-      const [products, mappings] = await Promise.all([fetchProducts(), fetchAllEcImportMappings()]);
+      const [products, mappings, processedKeys] = await Promise.all([
+        fetchProducts(),
+        fetchAllEcImportMappings(),
+        fetchProcessedOrderKeys(),
+      ]);
       const mappingsByKey = new Map();
       mappings.forEach((m) => {
         const arr = mappingsByKey.get(m.source_text) || [];
@@ -1604,14 +1648,14 @@ async function renderEcImportPage() {
       let entries = buildEcImportEntries(csvRows, products, fallbackDate);
       // キャッシュ済みの対応表を適用
       entries = applyEcImportMappings(entries, mappingsByKey);
-      renderEcImportReview(bodyEl, entries, products);
+      renderEcImportReview(bodyEl, entries, products, csvRows, mappingsByKey, fallbackDate, processedKeys);
     } catch (err) {
       bodyEl.innerHTML = `<p class="msg-error">読み込みに失敗しました: ${escapeHtml(err.message)}</p>`;
     }
   });
 }
 
-function renderEcImportReview(bodyEl, entries, products) {
+function renderEcImportReview(bodyEl, entries, products, csvRows, mappingsByKey, fallbackDate, processedKeys) {
   // 無視する(product_idがnullで解決済み)のものは除外
   const activeEntries = entries.filter((en) => !(en.resolved && !en.productId));
   const unresolvedKeys = [...new Set(activeEntries.filter((en) => !en.productId && en.cacheKey != null).map((en) => en.cacheKey))];
@@ -1680,12 +1724,94 @@ function renderEcImportReview(bodyEl, entries, products) {
       </tbody></table></div>`
     : '<p class="hint">まだ対応済みの商品がありません。</p>';
 
+  // ---- 本日の出荷処理(今日/明日/明後日の出荷予定日ごとにチェックボックスで選べる一覧) ----
+  const today = todayStr();
+  const tomorrow = nextDateStr(today);
+  const dayAfter = nextDateStr(tomorrow);
+  let shipBuckets = null;
+  const shipGroupsByIdx = [];
+  if (unresolvedKeys.length === 0 && csvRows && mappingsByKey) {
+    const rowGroups = buildEcImportRowGroups(csvRows, products, mappingsByKey, fallbackDate);
+    const processedSet = new Set((processedKeys || []).map((k) => `${k.order_no}||${k.raw_name}`));
+    shipBuckets = { overdue: [], unknown: [], today: [], tomorrow: [], dayAfter: [] };
+    rowGroups.forEach((g) => {
+      if (processedSet.has(`${g.orderNo}||${g.rawName}`)) return;
+      if (!g.date) {
+        shipBuckets.unknown.push(g);
+      } else if (g.date < today) {
+        shipBuckets.overdue.push(g);
+      } else if (g.date === today) {
+        shipBuckets.today.push(g);
+      } else if (g.date === tomorrow) {
+        shipBuckets.tomorrow.push(g);
+      } else if (g.date === dayAfter) {
+        shipBuckets.dayAfter.push(g);
+      }
+      // それより先の出荷予定日は今回の一覧には出さない
+    });
+  }
+
+  const renderShipGroupRow = (g, disabled, defaultChecked) => {
+    const idx = shipGroupsByIdx.length;
+    shipGroupsByIdx.push(g);
+    const itemsHtml = g.entries
+      .map((en) => {
+        const p = products.find((x) => x.id === en.productId);
+        return `${escapeHtml(p ? p.name : '(不明)')}×${en.qty}`;
+      })
+      .join('、');
+    return `
+      <label class="checkbox-label" style="align-items:flex-start;">
+        <input type="checkbox" class="ec-ship-row-checkbox" data-idx="${idx}" ${defaultChecked ? 'checked' : ''} ${
+      disabled ? 'disabled' : ''
+    }>
+        <span>
+          <strong>${escapeHtml(g.date || '(出荷予定日不明)')}</strong> ${escapeHtml(g.recipient)} <span class="hint">(${escapeHtml(
+      g.orderNo
+    )})</span><br>
+          ${itemsHtml}
+          <div class="hint">${escapeHtml(g.rawName.slice(0, 60))}${g.rawName.length > 60 ? '…' : ''}</div>
+        </span>
+      </label>`;
+  };
+
+  let shipSectionHtml = '';
+  if (shipBuckets) {
+    const buildSection = (title, arr, opts) => {
+      if (!arr.length) return '';
+      const rowsHtml = arr.map((g) => renderShipGroupRow(g, !!opts.disabled, !!opts.defaultChecked)).join('');
+      return `<div style="margin-bottom:16px;"><h3 style="margin:0 0 6px;${
+        opts.warn ? 'color:var(--danger);' : ''
+      }">${opts.warn ? '⚠️ ' : ''}${title}(${arr.length}件)</h3>${rowsHtml}</div>`;
+    };
+    const sectionsHtml = [
+      buildSection('出荷予定日を過ぎています', shipBuckets.overdue, { defaultChecked: true, warn: true }),
+      buildSection('出荷予定日が不明です', shipBuckets.unknown, { defaultChecked: true, warn: true }),
+      buildSection('本日出荷予定(自動的に含まれます)', shipBuckets.today, { defaultChecked: true, disabled: true }),
+      buildSection(`明日(${tomorrow})出荷予定`, shipBuckets.tomorrow, { defaultChecked: false }),
+      buildSection(`明後日(${dayAfter})出荷予定`, shipBuckets.dayAfter, { defaultChecked: false }),
+    ].join('');
+    const totalCount = shipGroupsByIdx.length;
+    shipSectionHtml = `
+    <div class="card">
+      <h2>本日(${today})の出荷処理</h2>
+      <p class="hint">出荷予定日が本日の分は自動的に本日の出荷として処理されます。明日・明後日出荷予定の分はチェックを入れると本日の出荷に前倒しできます。出荷予定日を過ぎている分・不明な分は見落とし防止のため警告表示し、デフォルトでチェック済みです(不要ならチェックを外してください)。一度確定した行は、同じ注文が翌日以降のCSVに再度含まれていても二重に処理されません。</p>
+      ${totalCount ? sectionsHtml : '<p class="hint">対象の注文はありません。</p>'}
+      ${
+        totalCount
+          ? '<button class="primary" id="ec-ship-confirm-btn">チェックした分を本日の出荷として確定する</button><div class="msg" id="ec-ship-msg"></div><div id="ec-ship-stock-result"></div>'
+          : ''
+      }
+    </div>`;
+  }
+
   bodyEl.innerHTML = `
     <div class="card">
       <h2>対応が必要な商品名(${unresolvedKeys.length}件)${skippedCount ? `・在庫管理外に設定済み${skippedCount}件` : ''}</h2>
       <p class="hint">助ネコの商品名に対応する在庫管理システムの商品を選んでください。セット商品などで1つの商品名が複数商品の詰め合わせになっている場合は種類数を2以上に、「3枚セット」のように同じ商品が複数個入っている場合は数量を書き換えてください。一度選ぶと、次回から自動で対応します。</p>
       ${unresolvedHtml}
     </div>
+    ${shipSectionHtml}
     <div class="card">
       <h2>取り込み内容(日付・商品ごとの合計)</h2>
       <p class="hint">数量はこの場で書き換えられます。保存した後にもう一度直したい時は、数量を書き換えてもう一度「保存する」を押してください(何度でも押せます)。同じ日付・カテゴリは<a href="?view=ec">EC出荷入力</a>からもいつでも呼び出して直せます。</p>
@@ -1759,7 +1885,10 @@ function renderEcImportReview(bodyEl, entries, products) {
           }
           newEntries.push(...expandEntryForMappingItems(en, items));
         });
-        renderEcImportReview(bodyEl, newEntries, products);
+        // 行グループ(本日の出荷処理セクション)も新しい対応表を反映して再計算できるよう、
+        // mappingsByKeyにもこの場で反映しておく。
+        mappingsByKey.set(key, items);
+        renderEcImportReview(bodyEl, newEntries, products, csvRows, mappingsByKey, fallbackDate, processedKeys);
       } catch (e) {
         confirmBtn.disabled = false;
         countSel.disabled = false;
@@ -1796,6 +1925,79 @@ function renderEcImportReview(bodyEl, entries, products) {
         msg.className = 'msg msg-error';
       } finally {
         confirmBtn.disabled = !!unresolvedKeys.length;
+      }
+    });
+  }
+
+  const shipConfirmBtn = document.getElementById('ec-ship-confirm-btn');
+  if (shipConfirmBtn) {
+    shipConfirmBtn.addEventListener('click', async () => {
+      shipConfirmBtn.disabled = true;
+      const msg = document.getElementById('ec-ship-msg');
+      msg.textContent = '処理中...';
+      msg.className = 'msg';
+      try {
+        const checkboxes = [...bodyEl.querySelectorAll('.ec-ship-row-checkbox')];
+        const includedGroups = checkboxes.filter((cb) => cb.checked).map((cb) => shipGroupsByIdx[Number(cb.dataset.idx)]);
+        const processedRows = [];
+        includedGroups.forEach((g) => {
+          g.entries.forEach((en) => {
+            processedRows.push({
+              order_no: g.orderNo,
+              raw_name: g.rawName,
+              product_id: en.productId,
+              qty: en.qty,
+              ship_date_original: g.date,
+              processed_date: today,
+            });
+          });
+        });
+        if (processedRows.length) {
+          await saveEcProcessedOrders(processedRows);
+        }
+        // 本日分の出荷記録(ec_shipments)を、ec_processed_ordersの本日分から合計し直して反映する
+        // (同じ日に複数回このボタンを押しても、常に正しい本日累計になるようにするため)
+        const todayProcessed = await fetchProcessedOrdersForDate(today);
+        const sumByProduct = {};
+        todayProcessed.forEach((r) => {
+          sumByProduct[r.product_id] = (sumByProduct[r.product_id] || 0) + Number(r.qty);
+        });
+        const batchEntries = Object.entries(sumByProduct).map(([productId, qty]) => ({ productId, qty }));
+        await saveEcBatch(today, EC_MALL_ALL, batchEntries);
+
+        // 本日時点の残り在庫(製造累計−卸出荷累計−EC出荷累計)を計算して表示する
+        const [prodRows, wsRows, ecRows] = await Promise.all([
+          fetchProductionRange(FAR_PAST_DATE, today),
+          fetchWholesaleRange(FAR_PAST_DATE, today),
+          fetchEcRange(FAR_PAST_DATE, today),
+        ]);
+        const prodSum = sumBefore(prodRows, 'record_date', nextDateStr(today));
+        const wsSum = sumBefore(wsRows, 'ship_date', nextDateStr(today));
+        const ecSum = sumBefore(ecRows, 'ship_date', nextDateStr(today));
+        const stockRows = products.map((p) => ({
+          category: p.category,
+          name: p.name,
+          stock: (prodSum[p.id] || 0) - (wsSum[p.id] || 0) - (ecSum[p.id] || 0),
+        }));
+        const stockHtml = `<div class="table-scroll"><table class="agg-table"><thead><tr><th>カテゴリ</th><th>商品</th><th>本日時点の残り在庫</th></tr></thead><tbody>
+          ${stockRows
+            .map(
+              (r) =>
+                `<tr><td>${escapeHtml(r.category)}</td><td class="row-label">${escapeHtml(r.name)}</td><td>${r.stock}</td></tr>`
+            )
+            .join('')}
+        </tbody></table></div>`;
+        document.getElementById('ec-ship-stock-result').innerHTML = `<h3>本日時点の残り在庫</h3>${stockHtml}`;
+
+        msg.textContent = `✓ ${includedGroups.length}件を本日の出荷として確定しました。`;
+        msg.className = 'msg msg-success';
+        checkboxes.forEach((cb) => {
+          cb.disabled = true;
+        });
+      } catch (e) {
+        msg.textContent = '処理に失敗しました: ' + e.message;
+        msg.className = 'msg msg-error';
+        shipConfirmBtn.disabled = false;
       }
     });
   }

@@ -146,3 +146,24 @@ insert into wholesale_destinations (name, sort_order, show_as_stock_column) valu
   ('ワンピース', 16, true),
   ('盛り付け', 17, true),
   ('細谷さん', 18, true);
+
+-- 2026-09-11 追加: 助ネコCSV「本日の出荷処理」機能の二重処理防止用テーブル。
+-- 助ネコCSVは未出荷分を毎回全件エクスポートする仕様のため、一度「本日の出荷」として
+-- 確定した行(受注番号+商品名+商品)は記録しておき、翌日以降のCSVに同じ注文が
+-- 再度含まれていても二重に在庫から引かないようにする。
+create table ec_processed_orders (
+  id uuid primary key default gen_random_uuid(),
+  order_no text not null,
+  raw_name text not null,
+  product_id uuid not null references products(id),
+  qty numeric not null,
+  ship_date_original text,
+  processed_date date not null,
+  created_at timestamptz not null default now(),
+  unique (order_no, raw_name, product_id)
+);
+alter table ec_processed_orders enable row level security;
+create policy "ec_processed_orders anon select" on ec_processed_orders for select using (true);
+create policy "ec_processed_orders anon insert" on ec_processed_orders for insert with check (true);
+create policy "ec_processed_orders anon update" on ec_processed_orders for update using (true);
+create policy "ec_processed_orders anon delete" on ec_processed_orders for delete using (true);

@@ -253,6 +253,35 @@ async function saveEcBatch(date, mall, entries) {
   }
 }
 
+// ---- 助ネコCSV取込: 「本日の出荷処理」で確定済みの行(二重処理防止用) ----
+
+// 全ての(受注番号, 商品名)の組を取得する。助ネコCSVは未出荷分を毎回全件エクスポートする
+// 仕様のため、一度「本日の出荷」として確定した行を翌日以降のCSVでも除外できるようにする。
+async function fetchProcessedOrderKeys() {
+  assertClient();
+  const { data, error } = await sb.from('ec_processed_orders').select('order_no,raw_name');
+  if (error) throw error;
+  return data || [];
+}
+
+async function fetchProcessedOrdersForDate(processedDate) {
+  assertClient();
+  const { data, error } = await sb.from('ec_processed_orders').select('*').eq('processed_date', processedDate);
+  if (error) throw error;
+  return data || [];
+}
+
+// rows: [{order_no, raw_name, product_id, qty, ship_date_original, processed_date}]
+// (order_no, raw_name, product_id)が既にある行は無視する(二重登録防止)。
+async function saveEcProcessedOrders(rows) {
+  assertClient();
+  if (!rows.length) return;
+  const { error } = await sb
+    .from('ec_processed_orders')
+    .upsert(rows, { onConflict: 'order_no,raw_name,product_id', ignoreDuplicates: true });
+  if (error) throw error;
+}
+
 // ---- 助ネコCSV取込: 商品名 → 自社商品 の対応表 ----
 
 async function fetchAllEcImportMappings() {

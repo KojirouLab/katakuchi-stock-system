@@ -130,6 +130,29 @@ alter table ec_import_product_mappings add constraint ec_import_product_mappings
 alter table ec_import_product_mappings add column if not exists qty_per_unit numeric not null default 1;
 ```
 
+**2026-09-11: 助ネコCSV取込に「本日の出荷処理」機能を追加(今日/明日/明後日の出荷予定日ごとにチェックボックスで選んで在庫を確定)**
+
+助ネコCSVは未出荷分を毎回全件エクスポートする仕様のため、一度「本日の出荷」として確定した行(受注番号+商品名+商品の組)を記録しておき、翌日以降のCSVに同じ注文が再度含まれていても二重に在庫から引かないようにする`ec_processed_orders`テーブルを追加します。
+
+```sql
+create table ec_processed_orders (
+  id uuid primary key default gen_random_uuid(),
+  order_no text not null,
+  raw_name text not null,
+  product_id uuid not null references products(id),
+  qty numeric not null,
+  ship_date_original text,
+  processed_date date not null,
+  created_at timestamptz not null default now(),
+  unique (order_no, raw_name, product_id)
+);
+alter table ec_processed_orders enable row level security;
+create policy "ec_processed_orders anon select" on ec_processed_orders for select using (true);
+create policy "ec_processed_orders anon insert" on ec_processed_orders for insert with check (true);
+create policy "ec_processed_orders anon update" on ec_processed_orders for update using (true);
+create policy "ec_processed_orders anon delete" on ec_processed_orders for delete using (true);
+```
+
 ## 困ったときは
 
 - 保存や読み込みに失敗する: 画面のエラーメッセージを確認し、通信状況を確認して再度お試しください。
