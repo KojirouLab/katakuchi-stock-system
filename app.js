@@ -457,7 +457,8 @@ async function renderStockPage() {
 // 商品ごとの在庫一覧の列構成を決める。
 // - shipment_mode='combined'なら「出荷」1本、それ以外はEC出荷/卸出荷を分ける
 // - 商品ごとに設定した独立列(destsForP)を間に挟む
-// - 在庫は常に表示、製造はshow_production!==falseの時だけ末尾に表示
+// - 在庫はshow_stock!==falseの時だけ、製造はshow_production!==falseの時だけ末尾に表示
+// (ムール貝のように製造も在庫管理もしない、入荷したらそのまま出荷する商品向け)
 function buildColumnsSpec(product, destsForP) {
   const cols = [];
   if (product.shipment_mode === 'combined') {
@@ -469,7 +470,9 @@ function buildColumnsSpec(product, destsForP) {
   if (product.shipment_mode !== 'combined') {
     cols.push({ type: 'wholesale_other', label: '卸出荷' });
   }
-  cols.push({ type: 'stock', label: '在庫' });
+  if (product.show_stock !== false) {
+    cols.push({ type: 'stock', label: '在庫' });
+  }
   if (product.show_production !== false) {
     cols.push({ type: 'production', label: '製造' });
   }
@@ -814,6 +817,10 @@ async function toggleProductEditForm(id, products, candidateDests) {
         <input type="checkbox" id="edit-showprod-${id}" ${p.show_production !== false ? 'checked' : ''}>
         在庫一覧に製造列を表示する(仕入れ品など製造しない商品はオフ)
       </label>
+      <label class="checkbox-label">
+        <input type="checkbox" id="edit-showstock-${id}" ${p.show_stock !== false ? 'checked' : ''}>
+        在庫一覧に在庫列を表示する(在庫を持たず入荷したらそのまま出荷する商品はオフ)
+      </label>
       <div class="field">
         <label>在庫一覧での出荷の表示</label>
         <select id="edit-shipmode-${id}">
@@ -838,6 +845,7 @@ async function toggleProductEditForm(id, products, candidateDests) {
         sortOrder: Number(document.getElementById(`edit-sort-${id}`).value) || 0,
         active: document.getElementById(`edit-active-${id}`).checked,
         showProduction: document.getElementById(`edit-showprod-${id}`).checked,
+        showStock: document.getElementById(`edit-showstock-${id}`).checked,
         shipmentMode: document.getElementById(`edit-shipmode-${id}`).value,
       });
       await setProductStockColumns(id, selectedDestIds);

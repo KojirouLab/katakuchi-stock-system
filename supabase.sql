@@ -11,7 +11,9 @@ create table if not exists products (
   -- 'split': 在庫一覧でEC出荷と卸出荷を分けて表示(通常)。'combined': 分けずに「出荷」1本にまとめる
   shipment_mode text not null default 'split' check (shipment_mode in ('split', 'combined')),
   -- 在庫一覧に製造列を表示するか(通常true。仕入れ品など製造しない商品ではfalseにする)
-  show_production boolean not null default true
+  show_production boolean not null default true,
+  -- 在庫一覧に在庫列を表示するか(通常true。在庫を持たず入荷したらそのまま出荷する商品ではfalseにする)
+  show_stock boolean not null default true
 );
 
 -- 商品ごとに「在庫一覧で独立列として表示する卸出荷先」を個別に選べるようにする

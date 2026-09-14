@@ -45,7 +45,7 @@ async function createProductsBulk(rows) {
   if (error) throw error;
 }
 
-async function updateProduct(id, { category, name, sortOrder, active, shipmentMode, showProduction }) {
+async function updateProduct(id, { category, name, sortOrder, active, shipmentMode, showProduction, showStock }) {
   assertClient();
   const { data, error } = await sb
     .from('products')
@@ -56,6 +56,7 @@ async function updateProduct(id, { category, name, sortOrder, active, shipmentMo
       active,
       shipment_mode: shipmentMode,
       show_production: showProduction,
+      show_stock: showStock,
     })
     .eq('id', id)
     .select();

@@ -153,6 +153,14 @@ create policy "ec_processed_orders anon update" on ec_processed_orders for updat
 create policy "ec_processed_orders anon delete" on ec_processed_orders for delete using (true);
 ```
 
+**2026-09-14: 在庫一覧に「在庫列を表示するか」の商品ごとの設定を追加**
+
+ムール貝のように在庫を持たず入荷したらそのまま出荷する商品では、在庫列(と製造列)が不要なため、`show_production`と同様に`show_stock`列を追加します。
+
+```sql
+alter table products add column if not exists show_stock boolean not null default true;
+```
+
 ## 困ったときは
 
 - 保存や読み込みに失敗する: 画面のエラーメッセージを確認し、通信状況を確認して再度お試しください。
