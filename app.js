@@ -1070,13 +1070,18 @@ function extractBundleFlavors(rawText) {
   const text = normalizeDigits(rawText);
   const startIdx = text.search(/\d+枚目[:：]/);
   if (startIdx === -1) return null;
-  const inner = text.slice(startIdx).replace(/[）)]+$/, '');
+  // 括弧は（）だけでなく〈〉のような二重括弧で囲まれていることもあるため、
+  // 末尾の余分な括弧はまとめて取り除く。
+  const TRAILING_BRACKETS = /[）)〉》】」』]+$/;
+  const inner = text.slice(startIdx).replace(TRAILING_BRACKETS, '');
   const segments = inner.split(/[、,]/);
   const flavors = [];
   segments.forEach((seg) => {
     // 「1.マルゲリータ」(ピリオドあり)と「７バジルソース…」(ピリオドなし)の両方に対応
     const m = seg.match(/\d+枚目[:：](\d+)[.．]?(.+)/);
-    if (m) flavors.push({ flavorNum: Number(m[1]), text: m[2].trim() });
+    // 最後の項目は「（〈…〉）」のように外側の括弧が付いたまま残ることがあるので、
+    // 項目ごとにも末尾の括弧を取り除く。
+    if (m) flavors.push({ flavorNum: Number(m[1]), text: m[2].trim().replace(TRAILING_BRACKETS, '') });
   });
   return flavors.length ? flavors : null;
 }
