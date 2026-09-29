@@ -587,11 +587,11 @@ async function loadStockBody(category, monthStr) {
 
     const headerRow1 =
       '<tr><th rowspan="2">日付</th>' +
-      products.map((p) => `<th colspan="${columnsSpecByProduct[p.id].length}">${escapeHtml(p.name)}</th>`).join('') +
+      products.map((p) => `<th class="group-start" colspan="${columnsSpecByProduct[p.id].length}">${escapeHtml(p.name)}</th>`).join('') +
       '</tr>';
     const headerRow2 =
       '<tr>' +
-      products.map((p) => columnsSpecByProduct[p.id].map((col) => `<th>${escapeHtml(col.label)}</th>`).join('')).join('') +
+      products.map((p) => columnsSpecByProduct[p.id].map((col, ci) => `<th${ci === 0 ? ' class="group-start"' : ''}>${escapeHtml(col.label)}</th>`).join('')).join('') +
       '</tr>';
     const bodyRows = rows
       .map((r) => {
@@ -600,11 +600,12 @@ async function loadStockBody(category, monthStr) {
             const p = products[pi];
             const cols = columnsSpecByProduct[p.id];
             return cols
-              .map((col) => {
+              .map((col, ci) => {
                 const val = cellValueForColumn(col, c);
                 const displayVal = col.type === 'stock' ? val : val || '';
                 const emptyCls = col.type !== 'stock' && !val ? ' cell-empty' : '';
-                return `<td class="stock-cell${emptyCls}" data-date="${r.date}" data-product-id="${p.id}">${displayVal}</td>`;
+                const groupCls = ci === 0 ? ' group-start' : '';
+                return `<td class="stock-cell${emptyCls}${groupCls}" data-date="${r.date}" data-product-id="${p.id}">${displayVal}</td>`;
               })
               .join('');
           })
@@ -616,7 +617,7 @@ async function loadStockBody(category, monthStr) {
 
     body.innerHTML = `
       <div class="table-scroll">
-        <table class="agg-table">
+        <table class="agg-table stock-grid">
           <thead>${headerRow1}${headerRow2}</thead>
           <tbody>${bodyRows}</tbody>
         </table>
