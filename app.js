@@ -1258,6 +1258,20 @@ function detectMichinokuSingleFlavor(rawText) {
   return null;
 }
 
+// 「冷凍ピザ マルゲリータ 本格ナポリピッツァ … みちのく 20cm ピザセット ナポリピザ 選べる枚数
+// 3・5・7・10枚.(〈セット:3枚セット…〉)」のように、みちのくのマルゲリータ(ナポリ)を枚数を
+// 選んで買うセット商品を検出する。枚数は「セット:N枚セット」の選択値を使う(タイトル前半の
+// 「3・5・7・10枚」は選択肢の一覧なので使わない)。20cmは8インチ(本人確認済み)。
+function detectMichinokuMargheritaCountSet(rawText) {
+  const text = normalizeDigits(rawText);
+  if (!/みちのく/.test(text) || !/マルゲリータ/.test(text) || !/ナポリ/.test(text)) return null;
+  const countMatch = text.match(/セット[:：]\s*(\d+)\s*枚セット/);
+  if (!countMatch) return null;
+  const inchMatch = text.match(/(\d+)\s*インチ/);
+  const size = inchMatch ? inchMatch[1] : '8';
+  return { category: '新みちのくナポリ', name: `マルゲ${size}インチ`, count: Number(countMatch[1]) };
+}
+
 // 「生地:マルゲリータ・ナポリタイプ、サイズ:10インチ、数量:5枚セット」
 // 「生地:マルゲリータ：ナポリタイプ、サイズ:8 インチ...」のように、フレーバー(マルゲリータ)・
 // 生地タイプ・サイズが「生地:」ラベルで明示されている選べるセット商品を検出する。区切り文字は
@@ -1523,6 +1537,16 @@ function buildEcImportEntries(csvRows, products, fallbackDate) {
           label: rawName,
           productId: product ? product.id : null,
           cacheKey: product ? null : `simple::${ps.category}::${ps.name}`,
+        });
+      } else if (detectMichinokuMargheritaCountSet(rawName)) {
+        const ms = detectMichinokuMargheritaCountSet(rawName);
+        const product = resolveProductByCategoryName(products, ms.category, ms.name);
+        entries.push({
+          date,
+          qty: r.qty * ms.count,
+          label: `${rawName.slice(0, 40)}…(${ms.count}枚 × 注文${r.qty}件)`,
+          productId: product ? product.id : null,
+          cacheKey: product ? null : `simple::${ms.category}::${ms.name}`,
         });
       } else if (detectMichinokuSingleFlavor(rawName)) {
         const mf = detectMichinokuSingleFlavor(rawName);
