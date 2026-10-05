@@ -64,6 +64,7 @@ function route() {
   if (view === 'ec') return renderEcPage();
   if (view === 'ec-import') return renderEcImportPage();
   if (view === 'stock') return renderStockPage();
+  if (view === 'today') return renderTodayStockPage();
   if (view === 'products') return renderProductsAdminPage();
   if (view === 'destinations') return renderDestinationsAdminPage();
   renderHome();
@@ -86,6 +87,7 @@ function renderHome() {
       <div class="card">
         <h2>在庫</h2>
         <ul class="home-links">
+          <li><a href="?view=today">今日の在庫(残りと、いつまで持つかの見込み)</a></li>
           <li><a href="?view=stock">在庫一覧</a></li>
         </ul>
       </div>
@@ -422,6 +424,166 @@ function sumBefore(rows, dateField, beforeDate) {
     }
   });
   return m;
+}
+
+// 祝日(出荷が減る傾向があるため、在庫切れ予測では日曜相当のペースとして扱う)。
+// 受発注システムと同じリスト。年が変わったら追記する。
+const JP_HOLIDAYS = new Set([
+  '2026-01-01', '2026-01-12', '2026-02-11', '2026-02-23', '2026-03-20', '2026-04-29',
+  '2026-05-03', '2026-05-04', '2026-05-05', '2026-05-06', '2026-07-20', '2026-08-11',
+  '2026-09-21', '2026-09-22', '2026-09-23', '2026-10-12', '2026-11-03', '2026-11-23',
+  '2027-01-01', '2027-01-11', '2027-02-11', '2027-02-23', '2027-03-21', '2027-03-22',
+  '2027-04-29', '2027-05-03', '2027-05-04', '2027-05-05', '2027-07-19', '2027-08-11',
+  '2027-09-20', '2027-09-23', '2027-10-11', '2027-11-03', '2027-11-23',
+]);
+
+function addDaysStr(dateStr, days) {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+// 1商品の在庫が尽きる日を予測する(受発注システムの牡蠣在庫と同じ考え方)。
+// 直近4週間の出荷(EC+卸)を曜日別に見て、その曜日で「最も出た日」のペースで毎日減っていくと
+// 仮定する安全側(厳しめ)の見積もり。祝日は日曜相当。出荷実績が無ければnullを返す。
+// 戻り値: { date: 尽きる日 or null(90日以上持つ), days: asOfDateからの日数 }
+const STOCKOUT_WINDOW_DAYS = 28;
+const STOCKOUT_MAX_DAYS = 90;
+function forecastStockout(stock, shippedByDate, asOfDate) {
+  const windowStart = addDaysStr(asOfDate, -(STOCKOUT_WINDOW_DAYS - 1));
+  const dates = Object.keys(shippedByDate).filter((d) => d >= windowStart && d <= asOfDate);
+  if (!dates.length) return null;
+  const weekdayMax = Array.from({ length: 7 }, () => ({ qty: 0, hasData: false }));
+  let overallMax = 0;
+  dates.forEach((d) => {
+    const dow = new Date(`${d}T00:00:00Z`).getUTCDay();
+    weekdayMax[dow].qty = Math.max(weekdayMax[dow].qty, shippedByDate[d]);
+    weekdayMax[dow].hasData = true;
+    overallMax = Math.max(overallMax, shippedByDate[d]);
+  });
+  if (stock <= 0) return { date: asOfDate, days: 0 };
+  let remaining = stock;
+  for (let i = 1; i <= STOCKOUT_MAX_DAYS; i++) {
+    const d = addDaysStr(asOfDate, i);
+    const dow = JP_HOLIDAYS.has(d) ? 0 : new Date(`${d}T00:00:00Z`).getUTCDay();
+    remaining -= weekdayMax[dow].hasData ? weekdayMax[dow].qty : overallMax;
+    if (remaining <= 0) return { date: d, days: i };
+  }
+  return { date: null, days: null };
+}
+
+// 在庫切れ予測をこの日数以内なら「もうすぐ切れる」として警告表示する
+const STOCK_WARN_DAYS = 7;
+
+async function renderTodayStockPage() {
+  app.innerHTML = `
+    <div class="page">
+      ${backLinkHtml()}
+      <h1>今日の在庫</h1>
+      <p class="hint">製造・EC出荷・卸出荷の記録から、指定した日の終わり時点の在庫(残り)を商品ごとに表示します。「いつまで持つか」は、直近4週間の曜日別で最も出荷が多かった日のペース(祝日は日曜相当)で厳しめに見積もった目安です。</p>
+      <div class="card">
+        <div class="field">
+          <label for="today-asof">この日時点の在庫を表示</label>
+          <input type="date" id="today-asof" value="${todayStr()}">
+        </div>
+        <button class="primary" id="today-apply">表示</button>
+      </div>
+      <div id="today-body"><p class="hint">読み込み中...</p></div>
+    </div>`;
+
+  const bodyEl = document.getElementById('today-body');
+  const load = async () => {
+    const asOfDate = document.getElementById('today-asof').value || todayStr();
+    bodyEl.innerHTML = '<p class="hint">読み込み中...</p>';
+    try {
+      const [products, prodRows, wsRows, ecRows] = await Promise.all([
+        fetchProducts(),
+        fetchProductionRange(FAR_PAST_DATE, asOfDate),
+        fetchWholesaleRange(FAR_PAST_DATE, asOfDate),
+        fetchEcRange(FAR_PAST_DATE, asOfDate),
+      ]);
+      const end = nextDateStr(asOfDate);
+      const prodSum = sumBefore(prodRows, 'record_date', end);
+      const wsSum = sumBefore(wsRows, 'ship_date', end);
+      const ecSum = sumBefore(ecRows, 'ship_date', end);
+      // 商品ごとの日別出荷数(EC+卸)。在庫切れ予測に使う。
+      const shippedByProduct = {};
+      const addShipped = (r) => {
+        const m = (shippedByProduct[r.product_id] = shippedByProduct[r.product_id] || {});
+        m[r.ship_date] = (m[r.ship_date] || 0) + Number(r.qty);
+      };
+      wsRows.forEach(addShipped);
+      ecRows.forEach(addShipped);
+
+      const items = products
+        .filter((p) => p.show_stock !== false)
+        .map((p) => {
+          const stock = (prodSum[p.id] || 0) - (wsSum[p.id] || 0) - (ecSum[p.id] || 0);
+          const forecast = forecastStockout(stock, shippedByProduct[p.id] || {}, asOfDate);
+          let level = 'ok';
+          // 在庫0で直近の出荷も無い商品(製造・販売していない時期の商品など)は警告しない
+          if (stock === 0 && !forecast) level = 'idle';
+          else if (stock <= 0) level = 'out';
+          else if (forecast && forecast.days != null && forecast.days <= STOCK_WARN_DAYS) level = 'soon';
+          return { product: p, stock, forecast, level };
+        });
+
+      const forecastText = (it) => {
+        if (it.level === 'idle') return '在庫なし(直近4週間の出荷なし)';
+        if (it.stock < 0) return '在庫切れ(マイナス)';
+        if (it.stock <= 0) return '在庫切れ';
+        if (!it.forecast) return '直近4週間の出荷実績なし';
+        if (it.forecast.date == null) return `${STOCKOUT_MAX_DAYS}日以上持つ見込み`;
+        return `${formatDateJp(it.forecast.date)}頃まで持つ見込み`;
+      };
+
+      const alertItems = items
+        .filter((it) => it.level === 'out' || it.level === 'soon')
+        .sort((a, b) => (a.forecast?.days ?? 0) - (b.forecast?.days ?? 0));
+      const alertHtml = alertItems.length
+        ? `<div class="card today-alert">
+            <h2>⚠️ 在庫切れ・${STOCK_WARN_DAYS}日以内に切れそうな商品(${alertItems.length}件)</h2>
+            ${alertItems
+              .map(
+                (it) => `<div class="qty-row"><span class="qty-name">${escapeHtml(it.product.name)} <span class="hint">${escapeHtml(
+                  it.product.category
+                )}</span></span><span class="today-forecast ${it.level}">${it.stock} / ${escapeHtml(forecastText(it))}</span></div>`
+              )
+              .join('')}
+            <p class="hint" style="margin:8px 0 0;">余裕をもって製造・入荷の手配をおすすめします。在庫がマイナスの商品は、製造入力の漏れがないかも確認してください。</p>
+          </div>`
+        : `<div class="card"><p class="msg-success" style="margin:0;">${STOCK_WARN_DAYS}日以内に在庫が切れそうな商品はありません。</p></div>`;
+
+      const heading = asOfDate === todayStr() ? '現在庫(残り)' : `在庫(${formatDateJp(asOfDate)}時点)`;
+      const categoriesHtml = CATEGORIES.map((cat) => {
+        const catItems = items.filter((it) => it.product.category === cat);
+        if (!catItems.length) return '';
+        return `<div class="card">
+          <h2>${escapeHtml(cat)}</h2>
+          ${catItems
+            .map(
+              (it) => `<div class="qty-row today-row">
+                <span class="qty-name">${escapeHtml(it.product.name)}</span>
+                <span class="today-right">
+                  <span class="today-stock ${it.level}">${it.stock}</span>
+                  <span class="today-forecast ${it.level}">${escapeHtml(forecastText(it))}</span>
+                </span>
+              </div>`
+            )
+            .join('')}
+        </div>`;
+      }).join('');
+
+      bodyEl.innerHTML = `
+        <h2 class="section-title">${heading}</h2>
+        ${alertHtml}
+        ${categoriesHtml || '<p class="hint">在庫を表示する商品がありません。</p>'}`;
+    } catch (err) {
+      bodyEl.innerHTML = `<p class="msg-error">読み込みに失敗しました: ${escapeHtml(err.message)}</p>`;
+    }
+  };
+  document.getElementById('today-apply').addEventListener('click', load);
+  load();
 }
 
 async function renderStockPage() {

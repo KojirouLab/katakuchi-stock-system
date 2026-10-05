@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>カタクチ商店 在庫管理システム</title>
-<link rel="icon" href="icons/icon-192.png?v=202610051700" type="image/png">
-<link rel="apple-touch-icon" href="icons/icon-192.png?v=202610051700">
+<link rel="icon" href="icons/icon-192.png?v=202610052000" type="image/png">
+<link rel="apple-touch-icon" href="icons/icon-192.png?v=202610052000">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="カタクチ商店 在庫管理">
 <meta name="theme-color" content="#0d6b58">
@@ -276,6 +276,35 @@
   .stock-grid thead tr:last-child th {
     border-bottom: 2px solid #6f6f69;
   }
+  .today-right {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    flex: none;
+  }
+  .today-stock {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--primary);
+  }
+  .today-forecast {
+    font-size: 12px;
+    color: var(--hint);
+  }
+  .today-stock.out, .today-forecast.out { color: var(--danger); }
+  .today-stock.soon, .today-forecast.soon { color: var(--warning); }
+  .today-alert {
+    background: var(--warning-bg);
+    border-color: #ecd9ae;
+  }
+  .today-alert .qty-row {
+    border-bottom-color: #ecd9ae;
+  }
+  .today-alert .today-forecast {
+    font-size: 13px;
+    font-weight: 700;
+  }
   .agg-table .stock-cell:hover {
     background: #e3f0ec !important;
   }
@@ -283,7 +312,7 @@
 </head>
 <body>
 <div id="app"></div>
-<script src="storage.js?v=202610051700"></script>
-<script src="app.js?v=202610051700"></script>
+<script src="storage.js?v=202610052000"></script>
+<script src="app.js?v=202610052000"></script>
 </body>
 </html>

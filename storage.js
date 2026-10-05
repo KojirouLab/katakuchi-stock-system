@@ -140,11 +140,23 @@ async function fetchProductionForDate(date) {
   return data || [];
 }
 
+// Supabaseは1回の取得が最大1000行のため、期間指定の取得は全件そろうまでページを分けて取得する
+// (在庫は全期間の累計で計算するので、途中で切れると在庫がずれてしまう)。
+async function fetchAllPages(buildQuery) {
+  const pageSize = 1000;
+  const all = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await buildQuery().order('id').range(from, from + pageSize - 1);
+    if (error) throw error;
+    all.push(...(data || []));
+    if (!data || data.length < pageSize) break;
+  }
+  return all;
+}
+
 async function fetchProductionRange(from, to) {
   assertClient();
-  const { data, error } = await sb.from('production_records').select('*').gte('record_date', from).lte('record_date', to);
-  if (error) throw error;
-  return data || [];
+  return fetchAllPages(() => sb.from('production_records').select('*').gte('record_date', from).lte('record_date', to));
 }
 
 // entries: [{ productId, qty }]。qty>0はupsert、qty<=0で既存行がある場合は削除する。
@@ -186,9 +198,7 @@ async function fetchWholesaleForDateDestination(date, destinationId) {
 
 async function fetchWholesaleRange(from, to) {
   assertClient();
-  const { data, error } = await sb.from('wholesale_shipments').select('*').gte('ship_date', from).lte('ship_date', to);
-  if (error) throw error;
-  return data || [];
+  return fetchAllPages(() => sb.from('wholesale_shipments').select('*').gte('ship_date', from).lte('ship_date', to));
 }
 
 async function saveWholesaleBatch(date, destinationId, entries) {
@@ -229,9 +239,7 @@ async function fetchEcForDateMall(date, mall) {
 
 async function fetchEcRange(from, to) {
   assertClient();
-  const { data, error } = await sb.from('ec_shipments').select('*').gte('ship_date', from).lte('ship_date', to);
-  if (error) throw error;
-  return data || [];
+  return fetchAllPages(() => sb.from('ec_shipments').select('*').gte('ship_date', from).lte('ship_date', to));
 }
 
 async function saveEcBatch(date, mall, entries) {
