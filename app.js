@@ -1609,6 +1609,66 @@ function buildEcImportRowGroups(csvRows, products, mappingsByKey, fallbackDate) 
   return groups;
 }
 
+// 受注番号つきCSVの「EC出荷入力に保存」。注文明細(受注番号+商品名+商品)をec_processed_ordersに
+// 記録し、今回新たに記録できた分だけを日付ごとのEC出荷数に加算する。ただし、取り込み済み記録が
+// 1件も無い日付(この仕組みを入れる前に取り込んだ日付)は、従来どおりCSVの合計で上書きする
+// (以前に取り込んだ分に加算して二重になるのを防ぐため)。保存できた明細の件数を返す。
+async function saveEcImportDeduped(csvRows, products, mappingsByKey, fallbackDate) {
+  const groups = buildEcImportRowGroups(csvRows, products, mappingsByKey, fallbackDate);
+  const byKey = {};
+  groups.forEach((g) => {
+    // 「2026-9-4」のような0埋め無しの日付も、DBから返る「2026-09-04」と揃える
+    const m = (g.date || '').match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    const date = m ? `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}` : todayStr();
+    g.entries.forEach((en) => {
+      const k = `${g.orderNo}||${g.rawName}||${en.productId}`;
+      if (!byKey[k]) {
+        byKey[k] = {
+          order_no: g.orderNo,
+          raw_name: g.rawName,
+          product_id: en.productId,
+          qty: 0,
+          ship_date_original: g.date,
+          processed_date: date,
+        };
+      }
+      byKey[k].qty += en.qty;
+    });
+  });
+  const rows = Object.values(byKey);
+  const dates = [...new Set(rows.map((r) => r.processed_date))];
+  const datesWithRecords = await fetchProcessedDatesAmong(dates);
+  const inserted = await insertEcProcessedOrdersReturningNew(rows);
+
+  const sumByDate = (list) => {
+    const out = {};
+    list.forEach((r) => {
+      const m = (out[r.processed_date] = out[r.processed_date] || {});
+      m[r.product_id] = (m[r.product_id] || 0) + Number(r.qty);
+    });
+    return out;
+  };
+  const csvSums = sumByDate(rows);
+  const insertedSums = sumByDate(inserted);
+  for (const date of dates) {
+    if (!datesWithRecords.has(date)) {
+      const entries = Object.entries(csvSums[date]).map(([productId, qty]) => ({ productId, qty }));
+      await saveEcBatch(date, EC_MALL_ALL, entries);
+      continue;
+    }
+    const add = insertedSums[date];
+    if (!add) continue;
+    const existing = await fetchEcForDateMall(date, EC_MALL_ALL);
+    const current = {};
+    existing.forEach((r) => {
+      current[r.product_id] = Number(r.qty);
+    });
+    const entries = Object.entries(add).map(([productId, qty]) => ({ productId, qty: (current[productId] || 0) + qty }));
+    await saveEcBatch(date, EC_MALL_ALL, entries);
+  }
+  return inserted.length;
+}
+
 async function renderEcImportPage() {
   app.innerHTML = `
     <div class="page wide">
@@ -1654,22 +1714,30 @@ async function renderEcImportPage() {
         arr.push({ productId: m.product_id, qty: m.qty_per_unit || 1 });
         mappingsByKey.set(m.source_text, arr);
       });
-      const hasDate = csvRows.some((r) => r.date);
+      // 前回までに取り込み済みの注文(受注番号+商品名)は除外する。間違って以前と同じCSVや
+      // 期間が重なるCSVを取り込んでも、在庫が二重に計算されないようにするため。
+      const processedSet = new Set(processedKeys.map((k) => `${k.order_no}||${k.raw_name}`));
+      const newCsvRows = csvRows.filter((r) => !(r.orderNo && processedSet.has(`${r.orderNo}||${r.name}`)));
+      const alreadyImportedCount = csvRows.length - newCsvRows.length;
+      const hasDate = newCsvRows.some((r) => r.date);
       let fallbackDate = '';
-      if (!hasDate) {
+      if (newCsvRows.length && !hasDate) {
         fallbackDate = window.prompt('CSVに日付の列がありませんでした。このCSVを何日の出荷分として取り込みますか?(例: 2026-08-29)', todayStr()) || todayStr();
       }
-      let entries = buildEcImportEntries(csvRows, products, fallbackDate);
+      let entries = buildEcImportEntries(newCsvRows, products, fallbackDate);
       // キャッシュ済みの対応表を適用
       entries = applyEcImportMappings(entries, mappingsByKey);
-      renderEcImportReview(bodyEl, entries, products, csvRows, mappingsByKey, fallbackDate, processedKeys);
+      renderEcImportReview(bodyEl, entries, products, newCsvRows, mappingsByKey, fallbackDate, processedKeys, alreadyImportedCount);
     } catch (err) {
       bodyEl.innerHTML = `<p class="msg-error">読み込みに失敗しました: ${escapeHtml(err.message)}</p>`;
     }
   });
 }
 
-function renderEcImportReview(bodyEl, entries, products, csvRows, mappingsByKey, fallbackDate, processedKeys) {
+function renderEcImportReview(bodyEl, entries, products, csvRows, mappingsByKey, fallbackDate, processedKeys, alreadyImportedCount = 0) {
+  // 全行に受注番号があれば、注文単位で取り込み済みを記録して二重計上を防ぐ(数量のその場修正は不可)。
+  // 受注番号の列が無いCSVでは従来どおり日付ごとの合計で上書き保存する。
+  const dedupeMode = csvRows.length > 0 && csvRows.every((r) => r.orderNo);
   // 無視する(product_idがnullで解決済み)のものは除外
   const activeEntries = entries.filter((en) => !(en.resolved && !en.productId));
   const unresolvedKeys = [...new Set(activeEntries.filter((en) => !en.productId && en.cacheKey != null).map((en) => en.cacheKey))];
@@ -1728,6 +1796,9 @@ function renderEcImportReview(bodyEl, entries, products, csvRows, mappingsByKey,
         ${resolvedRows
           .map((r) => {
             const p = products.find((x) => x.id === r.productId);
+            if (dedupeMode) {
+              return `<tr><td>${escapeHtml(r.date)}</td><td class="row-label">${escapeHtml(p ? p.name : '(不明)')}</td><td>${r.qty}</td></tr>`;
+            }
             return `<tr><td>${escapeHtml(r.date)}</td><td class="row-label">${escapeHtml(
               p ? p.name : '(不明)'
             )}</td><td><input type="text" inputmode="numeric" pattern="[0-9]*" class="qty-input ec-import-qty-input" data-date="${escapeHtml(
@@ -1819,7 +1890,12 @@ function renderEcImportReview(bodyEl, entries, products, csvRows, mappingsByKey,
     </div>`;
   }
 
+  const alreadyImportedHtml = alreadyImportedCount
+    ? `<div class="card"><p class="msg-success" style="margin:0;">このCSVのうち${alreadyImportedCount}行は前回までに取り込み済みの注文のため、除外しました(二重には計算されません)。</p></div>`
+    : '';
+
   bodyEl.innerHTML = `
+    ${alreadyImportedHtml}
     <div class="card">
       <h2>対応が必要な商品名(${unresolvedKeys.length}件)${skippedCount ? `・在庫管理外に設定済み${skippedCount}件` : ''}</h2>
       <p class="hint">助ネコの商品名に対応する在庫管理システムの商品を選んでください。セット商品などで1つの商品名が複数商品の詰め合わせになっている場合は種類数を2以上に、「3枚セット」のように同じ商品が複数個入っている場合は数量を書き換えてください。一度選ぶと、次回から自動で対応します。</p>
@@ -1828,7 +1904,11 @@ function renderEcImportReview(bodyEl, entries, products, csvRows, mappingsByKey,
     ${shipSectionHtml}
     <div class="card">
       <h2>取り込み内容(日付・商品ごとの合計)</h2>
-      <p class="hint">数量はこの場で書き換えられます。保存した後にもう一度直したい時は、数量を書き換えてもう一度「保存する」を押してください(何度でも押せます)。同じ日付・カテゴリは<a href="?view=ec">EC出荷入力</a>からもいつでも呼び出して直せます。</p>
+      <p class="hint">${
+        dedupeMode
+          ? '保存すると、取り込んだ注文が記録され、次回以降のCSVに同じ注文が含まれていても二重に計算されません。数量を直したい時は、保存後に<a href="?view=ec">EC出荷入力</a>で該当の日付を呼び出して直してください。'
+          : '数量はこの場で書き換えられます。保存した後にもう一度直したい時は、数量を書き換えてもう一度「保存する」を押してください(何度でも押せます)。同じ日付・カテゴリは<a href="?view=ec">EC出荷入力</a>からもいつでも呼び出して直せます。'
+      }</p>
       ${resolvedHtml}
       <button class="primary" id="ec-import-confirm-btn" ${unresolvedKeys.length ? 'disabled' : ''}>この内容をEC出荷入力に保存する</button>
       <p class="hint" id="ec-import-confirm-hint">${
@@ -1902,7 +1982,7 @@ function renderEcImportReview(bodyEl, entries, products, csvRows, mappingsByKey,
         // 行グループ(本日の出荷処理セクション)も新しい対応表を反映して再計算できるよう、
         // mappingsByKeyにもこの場で反映しておく。
         mappingsByKey.set(key, items);
-        renderEcImportReview(bodyEl, newEntries, products, csvRows, mappingsByKey, fallbackDate, processedKeys);
+        renderEcImportReview(bodyEl, newEntries, products, csvRows, mappingsByKey, fallbackDate, processedKeys, alreadyImportedCount);
       } catch (e) {
         confirmBtn.disabled = false;
         countSel.disabled = false;
@@ -1918,6 +1998,20 @@ function renderEcImportReview(bodyEl, entries, products, csvRows, mappingsByKey,
       const msg = document.getElementById('ec-import-msg');
       msg.textContent = '保存中...';
       msg.className = 'msg';
+      if (dedupeMode) {
+        try {
+          const savedCount = await saveEcImportDeduped(csvRows, products, mappingsByKey, fallbackDate);
+          msg.textContent = savedCount
+            ? `✓ ${savedCount}件の注文明細を保存しました。`
+            : '新たに保存する注文はありませんでした(すべて取り込み済みです)。';
+          msg.className = 'msg msg-success';
+        } catch (e) {
+          msg.textContent = '保存に失敗しました: ' + e.message;
+          msg.className = 'msg msg-error';
+          confirmBtn.disabled = false;
+        }
+        return;
+      }
       try {
         // その場で書き換えられた数量を、保存直前に読み直す(初回確定後の再修正にも対応するため)
         const currentRows = [...bodyEl.querySelectorAll('.ec-import-qty-input')].map((el) => ({

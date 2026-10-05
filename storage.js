@@ -260,9 +260,20 @@ async function saveEcBatch(date, mall, entries) {
 // 仕様のため、一度「本日の出荷」として確定した行を翌日以降のCSVでも除外できるようにする。
 async function fetchProcessedOrderKeys() {
   assertClient();
-  const { data, error } = await sb.from('ec_processed_orders').select('order_no,raw_name');
-  if (error) throw error;
-  return data || [];
+  // Supabaseは1回の取得が最大1000行のため、全件そろうまでページを分けて取得する
+  const pageSize = 1000;
+  const all = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await sb
+      .from('ec_processed_orders')
+      .select('order_no,raw_name')
+      .order('id')
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+    all.push(...(data || []));
+    if (!data || data.length < pageSize) break;
+  }
+  return all;
 }
 
 async function fetchProcessedOrdersForDate(processedDate) {
@@ -281,6 +292,31 @@ async function saveEcProcessedOrders(rows) {
     .from('ec_processed_orders')
     .upsert(rows, { onConflict: 'order_no,raw_name,product_id', ignoreDuplicates: true });
   if (error) throw error;
+}
+
+// saveEcProcessedOrdersと同じく既存行は無視して登録し、今回新たに登録できた行だけを返す
+// (同じCSVを2回保存しても、2回目は何も返らないので在庫に二重加算されない)。
+async function insertEcProcessedOrdersReturningNew(rows) {
+  assertClient();
+  if (!rows.length) return [];
+  const { data, error } = await sb
+    .from('ec_processed_orders')
+    .upsert(rows, { onConflict: 'order_no,raw_name,product_id', ignoreDuplicates: true })
+    .select();
+  if (error) throw error;
+  return data || [];
+}
+
+// 指定した日付のうち、ec_processed_ordersに1件でも記録がある日付を返す。
+async function fetchProcessedDatesAmong(dates) {
+  assertClient();
+  const found = new Set();
+  for (const date of dates) {
+    const { data, error } = await sb.from('ec_processed_orders').select('id').eq('processed_date', date).limit(1);
+    if (error) throw error;
+    if (data && data.length) found.add(date);
+  }
+  return found;
 }
 
 // ---- 助ネコCSV取込: 商品名 → 自社商品 の対応表 ----
