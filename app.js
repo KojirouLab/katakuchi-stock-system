@@ -1114,6 +1114,18 @@ function detectFixedVarietySet(rawText) {
   return null;
 }
 
+// 中身が決まっている「おすすめセット」を検出し、入っている商品のフレーバー番号を返す。
+// 例: 「おすすめ5枚セットB みちのくナポリ」= 3アラビアータ・6シラス・7魚介(バジルソースと
+// シーフード)・8スモークチーズ・9タラコ を1枚ずつ。
+const RECOMMEND_SETS = [
+  { pattern: /おすすめ\s*5\s*枚\s*セット\s*B/, category: '新みちのくナポリ', requires: 'ナポリ', flavorNums: [3, 6, 7, 8, 9] },
+];
+
+function detectRecommendSet(rawText) {
+  const text = normalizeDigits(rawText);
+  return RECOMMEND_SETS.find((set) => set.pattern.test(text) && text.includes(set.requires)) || null;
+}
+
 // 「5枚+シュレッドチーズ300gセット」のように、ピザ生地とシュレッドチーズ1袋がセットに
 // なっている商品タイトルを検出する。ピザの枚数だけを倍率として返す(チーズは1袋固定)。
 function detectPizzaPlusCheeseBundle(rawText) {
@@ -1394,6 +1406,18 @@ function buildEcImportEntries(csvRows, products, fallbackDate) {
             cacheKey,
           });
         }
+      } else if (detectRecommendSet(rawName)) {
+        const set = detectRecommendSet(rawName);
+        set.flavorNums.forEach((flavorNum) => {
+          const product = resolveProductByPrefix(products, set.category, flavorNum);
+          entries.push({
+            date,
+            qty: r.qty,
+            label: `${rawName.slice(0, 24)}…(${flavorNum}番)`,
+            productId: product ? product.id : null,
+            cacheKey: product ? null : `${set.category}::${flavorNum}`,
+          });
+        });
       } else if (detectPizzaPlusCheeseBundle(rawName)) {
         // ピザ生地とシュレッドチーズ1袋のセット商品。ピザ側とチーズ側、2つの商品として
         // それぞれ計上する(片方が見つからなくても、もう片方は解決できるように独立させる)。
@@ -1773,6 +1797,12 @@ function renderEcImportReview(bodyEl, entries, products, csvRows, mappingsByKey,
             <option value="2">2種類(1つずつ)</option>
             <option value="3">3種類(1つずつ)</option>
             <option value="4">4種類(1つずつ)</option>
+            <option value="5">5種類(1つずつ)</option>
+            <option value="6">6種類(1つずつ)</option>
+            <option value="7">7種類(1つずつ)</option>
+            <option value="8">8種類(1つずつ)</option>
+            <option value="9">9種類(1つずつ)</option>
+            <option value="10">10種類(1つずつ)</option>
           </select>
         </div>
         <div class="ec-import-product-slots"></div>
