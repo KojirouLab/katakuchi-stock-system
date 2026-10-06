@@ -1137,6 +1137,7 @@ function csvRowsToObjects(rows) {
         ? findCol('発送')
         : findCol('日'),
     orderNo: findCol('受注番号') >= 0 ? findCol('受注番号') : findCol('注文'),
+    processedDate: findCol('処理済日'),
     recipientSei: findCol('お届け先名（姓）'),
     recipientMei: findCol('お届け先名（名）'),
   };
@@ -1150,8 +1151,11 @@ function csvRowsToObjects(rows) {
         name: idx.name >= 0 ? normalizeForMatch(r[idx.name] || '') : '',
         code: idx.code >= 0 ? normalizeForMatch((r[idx.code] || '').trim()) : '',
         qty: idx.qty >= 0 ? Number(r[idx.qty]) || 0 : 0,
-        date: idx.date >= 0 ? (r[idx.date] || '').trim().replace(/\//g, '-') : '',
+        // 処理済日(実際に出荷した日)が入っていればそちらを優先する。出荷予定日と処理済日が
+        // ずれる注文(営業所止め等)もあるため、在庫は実際に出荷した日で減らす。
+        date: ((idx.processedDate >= 0 && (r[idx.processedDate] || '').trim()) || (idx.date >= 0 ? (r[idx.date] || '').trim() : '')).replace(/\//g, '-'),
         orderNo: idx.orderNo >= 0 ? r[idx.orderNo] || '' : '',
+        processedDate: idx.processedDate >= 0 ? (r[idx.processedDate] || '').trim() : '',
         recipient: `${sei}${mei ? ' ' + mei : ''}`.trim(),
       };
     });
@@ -1350,7 +1354,9 @@ function detectMichinokuSingleFlavor(rawText) {
 function detectMichinokuMargheritaCountSet(rawText) {
   const text = normalizeDigits(rawText);
   if (!/みちのく/.test(text) || !/マルゲリータ/.test(text) || !/ナポリ/.test(text)) return null;
-  const countMatch = text.match(/セット[:：]\s*(\d+)\s*枚セット/);
+  // 「マルゲリータ 3枚セット …(6インチ直径15cm)」のように選択欄が無く、タイトルに枚数が
+  // 直接書かれている商品にも対応する(ピザ生地の6ナポリと誤判定されていた)。
+  const countMatch = text.match(/セット[:：]\s*(\d+)\s*枚セット/) || text.match(/(\d+)\s*枚セット/);
   if (!countMatch) return null;
   const inchMatch = text.match(/(\d+)\s*インチ/);
   const size = inchMatch ? inchMatch[1] : '8';
@@ -1735,6 +1741,7 @@ function buildEcImportRowGroups(csvRows, products, mappingsByKey, fallbackDate) 
       orderNo: r.orderNo,
       rawName: r.name,
       recipient: r.recipient || '',
+      processedDate: r.processedDate || '',
       date: r.date || fallbackDate || '',
       entries: resolved,
     });
@@ -1744,7 +1751,7 @@ function buildEcImportRowGroups(csvRows, products, mappingsByKey, fallbackDate) 
 
 // 受注番号つきCSVの「EC出荷入力に保存」。注文明細(受注番号+商品名+商品)をec_processed_ordersに
 // 記録し、今回新たに記録できた分だけを日付ごとのEC出荷数に加算する。ただし、取り込み済み記録が
-// 1件も無い日付(この仕組みを入れる前に取り込んだ日付)は、従来どおりCSVの合計で上書きする
+// 1件も無い日付(この仕組みを入れる前に取り込んだ日付)は、今回記録できた分の合計で上書きする
 // (以前に取り込んだ分に加算して二重になるのを防ぐため)。保存できた明細の件数を返す。
 async function saveEcImportDeduped(csvRows, products, mappingsByKey, fallbackDate) {
   const groups = buildEcImportRowGroups(csvRows, products, mappingsByKey, fallbackDate);
@@ -1781,16 +1788,18 @@ async function saveEcImportDeduped(csvRows, products, mappingsByKey, fallbackDat
     });
     return out;
   };
-  const csvSums = sumByDate(rows);
   const insertedSums = sumByDate(inserted);
   for (const date of dates) {
+    // 今回新たに記録できた分だけを使う。既に記録済みの明細(別の日付で計上済みのものを含む)は
+    // どちらの場合も計上しない(以前、「本日の出荷処理」で今日の分として確定した注文を、
+    // 続けてこのボタンで元の日付にも計上してしまい二重になったことがあるため)。
+    const add = insertedSums[date];
+    if (!add) continue;
     if (!datesWithRecords.has(date)) {
-      const entries = Object.entries(csvSums[date]).map(([productId, qty]) => ({ productId, qty }));
+      const entries = Object.entries(add).map(([productId, qty]) => ({ productId, qty }));
       await saveEcBatch(date, EC_MALL_ALL, entries);
       continue;
     }
-    const add = insertedSums[date];
-    if (!add) continue;
     const existing = await fetchEcForDateMall(date, EC_MALL_ALL);
     const current = {};
     existing.forEach((r) => {
@@ -1960,6 +1969,9 @@ function renderEcImportReview(bodyEl, entries, products, csvRows, mappingsByKey,
     shipBuckets = { overdue: [], unknown: [], today: [], tomorrow: [], dayAfter: [] };
     rowGroups.forEach((g) => {
       if (processedSet.has(`${g.orderNo}||${g.rawName}`)) return;
+      // 助ネコで処理済日が入っている注文は出荷済みなので、「本日の出荷」の対象にしない
+      // (出荷済みのCSVで確定すると、実際の出荷日ではなく今日の出荷として二重に計上されてしまうため)
+      if (g.processedDate) return;
       if (!g.date) {
         shipBuckets.unknown.push(g);
       } else if (g.date < today) {
